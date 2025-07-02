@@ -15,6 +15,10 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 console.log(`🌍 Environment: ${NODE_ENV}`);
 console.log(`🔗 Base URL: ${BASE_URL}`);
 
+// Initialize Express app
+const app = express();
+const server = http.createServer(app);
+
 // Socket.io 配置，適合 Render 部署
 const io = socketIo(server, {
     cors: {
