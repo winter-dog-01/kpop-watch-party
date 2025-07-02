@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K-Pop Watch Party - Room</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/room.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div id="danmuContainer" class="danmu-container"></div>
+    
+    <div class="room-container">
+        <header class="room-header">
+            <div class="room-info">
+                <h1 id="roomTitle">Room Name</h1>
+                <div class="room-details">
+                    <span id="userCount" class="user-count">👥 1 viewer</span>
+                    <span id="roomId" class="room-id"></span>
+                </div>
+            </div>
+            <div class="header-controls">
+                <button id="customizeBtn" class="control-btn">
+                    <i class="fas fa-palette"></i> Customize
+                </button>
+                <button id="inviteBtn" class="control-btn">
+                    <i class="fas fa-share"></i> Invite
+                </button>
+                <button id="leaveBtn" class="control-btn leave-btn">
+                    <i class="fas fa-sign-out-alt"></i> Leave
+                </button>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="video-section">
+                <div class="video-controls">
+                    <div class="url-input-container">
+                        <input type="text" id="youtubeUrl" placeholder="Paste YouTube URL here..." class="url-input">
+                        <button id="loadVideoBtn" class="load-btn">
+                            <i class="fas fa-play"></i> Load Video
+                        </button>
+                    </div>
+                    <div class="video-info" id="videoInfo" style="display: none;">
+                        <span id="videoTitle">No video loaded</span>
+                        <div class="sync-controls">
+                            <button id="syncBtn" class="sync-btn">
+                                <i class="fas fa-sync"></i> Sync
+                            </button>
+                            <span id="syncStatus" class="sync-status">In Sync</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="video-container">
+                    <div id="youtubePlayer" class="youtube-player">
+                        <div class="no-video">
+                            <i class="fas fa-video"></i>
+                            <p>Load a YouTube video to start watching together!</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="danmu-controls">
+                    <button id="toggleDanmu" class="danmu-toggle active">
+                        <i class="fas fa-eye"></i> Hide Danmu
+                    </button>
+                    <div class="quick-danmu">
+                        <button class="quick-btn" data-emoji="❤️">❤️</button>
+                        <button class="quick-btn" data-emoji="🎆">🎆</button>
+                        <button class="quick-btn" data-emoji="🥰">🥰</button>
+                        <button class="quick-btn" data-emoji="🔥">🔥</button>
+                        <button class="quick-btn" data-emoji="💜">💜</button>
+                        <button class="quick-btn" data-emoji="✨">✨</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-section">
+                <div class="chat-container">
+                    <div id="chatMessages" class="chat-messages"></div>
+                    <div class="chat-input-container">
+                        <input type="text" id="chatInput" placeholder="Type your message..." class="chat-input">
+                        <button id="sendChatBtn" class="send-btn">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="danmu-input-container">
+                    <input type="text" id="danmuInput" placeholder="Send danmu comment..." class="danmu-input">
+                    <button id="sendDanmuBtn" class="send-danmu-btn">
+                        <i class="fas fa-comment"></i> Send Danmu
+                    </button>
+                </div>
+
+                <div class="users-list">
+                    <h3>Online Users</h3>
+                    <div id="usersList" class="users-container"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Customization Modal -->
+    <div id="customizeModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Customize Room</h3>
+                <button class="close-btn" id="closeCustomizeModal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="customize-section">
+                    <label for="backgroundUpload">Background Image:</label>
+                    <input type="file" id="backgroundUpload" accept="image/*">
+                    <button id="removeBackground" class="remove-bg-btn">Remove Background</button>
+                </div>
+                <div class="customize-section">
+                    <label for="themeColor">Theme Color:</label>
+                    <input type="color" id="themeColor" value="#6b46c1">
+                </div>
+                <div class="customize-section">
+                    <label for="danmuSpeed">Danmu Speed:</label>
+                    <input type="range" id="danmuSpeed" min="1" max="10" value="5">
+                    <span id="speedValue">5</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Invite Modal -->
+    <div id="inviteModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Invite Friends</h3>
+                <button class="close-btn" id="closeInviteModal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p>Share this link with your friends:</p>
+                <div class="link-container">
+                    <input type="text" id="shareLink" readonly>
+                    <button id="copyShareBtn" class="copy-btn">
+                        <i class="fas fa-copy"></i> Copy
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script src="js/danmu.js"></script>
+    <script src="js/youtube.js"></script>
+    <script src="js/room.js"></script>
+    
+    <script>
+        // Connection check and initialization
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM loaded, checking connections...');
+            
+            // Check if all systems are available
+            setTimeout(() => {
+                console.log('Systems check:');
+                console.log('- Socket.io:', typeof io !== 'undefined' ? '✅' : '❌');
+                console.log('- Danmu System:', window.danmuSystem ? '✅' : '❌');
+                console.log('- YouTube Player:', window.youtubePlayer ? '✅' : '❌');
+                console.log('- Room Manager:', window.roomManager ? '✅' : '❌');
+                
+                if (!window.roomManager) {
+                    console.error('Room Manager failed to initialize!');
+                }
+            }, 2000);
+        });
+    </script>
+</body>
+</html>

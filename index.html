@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K-Pop Watch Party</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="title">🎵 K-Pop Watch Party 🎵</h1>
+            <p class="subtitle">Watch together, vibe together!</p>
+        </header>
+
+        <main class="main-content">
+            <div class="create-room-section">
+                <h2>Create Your Room</h2>
+                <form id="createRoomForm" class="room-form">
+                    <div class="input-group">
+                        <label for="username">Your Name:</label>
+                        <input type="text" id="username" name="username" required placeholder="Enter your username">
+                    </div>
+
+                    <div class="input-group">
+                        <label for="roomName">Room Name:</label>
+                        <input type="text" id="roomName" name="roomName" required placeholder="My K-Pop Room">
+                    </div>
+
+                    <div class="room-type-selection">
+                        <h3>Room Type:</h3>
+                        <div class="radio-group">
+                            <label class="radio-label">
+                                <input type="radio" name="roomType" value="public" checked>
+                                <span class="radio-custom"></span>
+                                Public Room (visible to everyone)
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="roomType" value="private">
+                                <span class="radio-custom"></span>
+                                Private Room (invite only)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="privateOptions" class="private-options hidden">
+                        <div class="input-group">
+                            <label for="roomPassword">Password (optional):</label>
+                            <input type="password" id="roomPassword" name="roomPassword" placeholder="Leave empty for link-only access">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="create-btn">
+                        <i class="fas fa-plus"></i> Create Room
+                    </button>
+                </form>
+            </div>
+
+            <div class="public-rooms-section">
+                <h2>Join Public Rooms</h2>
+                <div id="publicRoomsList" class="rooms-list">
+                    <div class="no-rooms">
+                        <p>No public rooms available. Be the first to create one!</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="join-private-section">
+                <h2>Join Private Room</h2>
+                <form id="joinPrivateForm" class="join-form">
+                    <div class="input-group">
+                        <label for="joinUsername">Your Name:</label>
+                        <input type="text" id="joinUsername" name="joinUsername" required placeholder="Enter your username">
+                    </div>
+                    <div class="input-group">
+                        <label for="roomId">Room ID or Link:</label>
+                        <input type="text" id="roomId" name="roomId" required placeholder="Paste room link or enter room ID">
+                    </div>
+                    <div class="input-group">
+                        <label for="joinPassword">Password (if required):</label>
+                        <input type="password" id="joinPassword" name="joinPassword" placeholder="Enter room password">
+                    </div>
+                    <button type="submit" class="join-btn">
+                        <i class="fas fa-sign-in-alt"></i> Join Room
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <div id="loadingModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="loading-spinner"></div>
+            <p>Creating your room...</p>
+        </div>
+    </div>
+
+    <div id="inviteLinkModal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Room Created Successfully!</h3>
+            <p>Share this link with your friends:</p>
+            <div class="link-container">
+                <input type="text" id="inviteLink" readonly>
+                <button id="copyLinkBtn" class="copy-btn">
+                    <i class="fas fa-copy"></i> Copy
+                </button>
+            </div>
+            <button id="enterRoomBtn" class="enter-room-btn">Enter Room</button>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

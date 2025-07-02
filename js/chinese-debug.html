@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>房間創建調試</title>
+    <style>
+        body { 
+            font-family: '微軟正黑體', Arial, sans-serif; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            color: white; 
+            min-height: 100vh;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: rgba(255,255,255,0.1); 
+            padding: 30px; 
+            border-radius: 20px; 
+            backdrop-filter: blur(10px);
+        }
+        .step { 
+            margin: 20px 0; 
+            padding: 20px; 
+            background: rgba(255,255,255,0.1); 
+            border-radius: 15px; 
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .step h3 { 
+            margin-top: 0; 
+            color: #fff; 
+            display: flex; 
+            align-items: center; 
+            gap: 10px;
+        }
+        button { 
+            padding: 12px 25px; 
+            margin: 8px; 
+            cursor: pointer; 
+            border: none; 
+            border-radius: 8px; 
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+        button:hover { transform: translateY(-2px); }
+        .success { background: #10b981; color: white; }
+        .error { background: #ef4444; color: white; }
+        .info { background: #3b82f6; color: white; }
+        .warning { background: #f59e0b; color: white; }
+        #console { 
+            background: #1f2937; 
+            color: #10b981; 
+            padding: 20px; 
+            border-radius: 10px; 
+            font-family: 'Consolas', monospace; 
+            white-space: pre-wrap; 
+            height: 300px; 
+            overflow-y: auto; 
+            border: 1px solid #374151;
+        }
+        .status { 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 8px; 
+            font-weight: 500;
+        }
+        .form-group {
+            margin: 15px 0;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        .emoji { font-size: 1.5em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 K-Pop 觀看派對 - 房間調試工具</h1>
+        <p>這個頁面會幫你找出為什麼創建房間後會跳轉回首頁的問題。</p>
+
+        <div class="step">
+            <h3><span class="emoji">🔗</span> 步驟 1：測試服務器連接</h3>
+            <button class="info" onclick="testConnection()">測試連接</button>
+            <div id="connection-status"></div>
+        </div>
+
+        <div class="step">
+            <h3><span class="emoji">🏠</span> 步驟 2：創建測試房間</h3>
+            <div class="form-group">
+                <label>用戶名：</label>
+                <input type="text" id="testUsername" value="測試用戶" placeholder="輸入你的用戶名">
+            </div>
+            <div class="form-group">
+                <label>房間名：</label>
+                <input type="text" id="testRoomName" value="測試房間" placeholder="輸入房間名稱">
+            </div>
+            <button class="success" onclick="createTestRoom()">創建房間</button>
+            <div id="room-creation-status"></div>
+        </div>
+
+        <div class="step">
+            <h3><span class="emoji">💾</span> 步驟 3：測試數據保存</h3>
+            <button class="warning" onclick="testSessionStorage()">測試數據保存</button>
+            <div id="storage-status"></div>
+        </div>
+
+        <div class="step">
+            <h3><span class="emoji">🚪</span> 步驟 4：測試房間進入</h3>
+            <button class="info" onclick="testRoomJoining()">測試進入房間</button>
+            <div id="join-status"></div>
+        </div>
+
+        <div class="step">
+            <h3><span class="emoji">🔄</span> 步驟 5：完整流程測試</h3>
+            <button class="success" onclick="runFullTest()">運行完整測試</button>
+            <button class="warning" onclick="goToActualHomepage()">去真正的首頁</button>
+            <div id="full-test-status"></div>
+        </div>
+
+        <div class="step">
+            <h3><span class="emoji">📝</span> 控制台輸出</h3>
+            <div id="console"></div>
+            <button onclick="clearConsole()">清除輸出</button>
+            <button onclick="downloadLog()">下載日誌</button>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket;
+        let createdRoomId = null;
+        let testResults = {};
+        const consoleOutput = document.getElementById('console');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : type === 'warning' ? '⚠️' : 'ℹ️';
+            const logMessage = `[${timestamp}] ${prefix} ${message}\n`;
+            consoleOutput.textContent += logMessage;
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+            console.log(message);
+        }
+
+        function updateStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function testConnection() {
+            log('🔗 正在測試服務器連接...');
+            updateStatus('connection-status', '正在測試連接...', 'info');
+
+            if (typeof io === 'undefined') {
+                log('Socket.io 未載入！', 'error');
+                updateStatus('connection-status', '❌ Socket.io 未載入', 'error');
+                testResults.connection = false;
+                return;
+            }
+
+            socket = io();
+
+            socket.on('connect', () => {
+                log(`✅ 連接成功！Socket ID: ${socket.id}`, 'success');
+                updateStatus('connection-status', `✅ 連接成功！ID: ${socket.id}`, 'success');
+                testResults.connection = true;
+            });
+
+            socket.on('connect_error', (error) => {
+                log(`❌ 連接失敗: ${error.message}`, 'error');
+                updateStatus('connection-status', `❌ 連接失敗: ${error.message}`, 'error');
+                testResults.connection = false;
+            });
+        }
+
+        function createTestRoom() {
+            const username = document.getElementById('testUsername').value.trim();
+            const roomName = document.getElementById('testRoomName').value.trim();
+            
+            log(`🏠 正在創建房間... 用戶名: ${username}, 房間名: ${roomName}`);
+            updateStatus('room-creation-status', '正在創建房間...', 'info');
+
+            if (!socket || !socket.connected) {
+                log('❌ 未連接到服務器！', 'error');
+                updateStatus('room-creation-status', '❌ 未連接到服務器', 'error');
+                return;
+            }
+
+            socket.emit('createRoom', {
+                username: username,
+                roomName: roomName,
+                roomType: 'public',
+                password: null
+            });
+
+            socket.on('roomCreated', (data) => {
+                log(`📨 房間創建響應: ${JSON.stringify(data, null, 2)}`, 'info');
+                
+                if (data.success) {
+                    createdRoomId = data.roomId;
+                    log(`✅ 房間創建成功！房間ID: ${data.roomId}`, 'success');
+                    updateStatus('room-creation-status', `✅ 房間創建成功！ID: ${data.roomId}`, 'success');
+                    testResults.roomCreation = true;
+                } else {
+                    log(`❌ 房間創建失敗: ${data.message}`, 'error');
+                    updateStatus('room-creation-status', `❌ 創建失敗: ${data.message}`, 'error');
+                    testResults.roomCreation = false;
+                }
+            });
+
+            socket.on('error', (error) => {
+                log(`❌ 房間創建錯誤: ${error.message}`, 'error');
+                updateStatus('room-creation-status', `❌ 錯誤: ${error.message}`, 'error');
+                testResults.roomCreation = false;
+            });
+        }
+
+        function testSessionStorage() {
+            log('💾 正在測試 Session Storage...');
+            
+            try {
+                const testData = {
+                    roomId: createdRoomId || 'test123',
+                    username: document.getElementById('testUsername').value,
+                    isHost: true
+                };
+
+                log(`💾 嘗試保存數據: ${JSON.stringify(testData, null, 2)}`);
+                sessionStorage.setItem('roomData', JSON.stringify(testData));
+                
+                const retrieved = sessionStorage.getItem('roomData');
+                const parsed = JSON.parse(retrieved);
+                
+                log(`✅ Session Storage 寫入成功`, 'success');
+                log(`📖 讀取的數據: ${JSON.stringify(parsed, null, 2)}`, 'info');
+                updateStatus('storage-status', '✅ 數據保存功能正常', 'success');
+                testResults.storage = true;
+                
+            } catch (error) {
+                log(`❌ Session Storage 錯誤: ${error.message}`, 'error');
+                updateStatus('storage-status', `❌ 數據保存錯誤: ${error.message}`, 'error');
+                testResults.storage = false;
+            }
+        }
+
+        function testRoomJoining() {
+            log('🚪 正在測試房間進入...');
+            updateStatus('join-status', '正在測試進入房間...', 'info');
+
+            if (!createdRoomId) {
+                log('❌ 沒有可用的房間ID！請先創建房間。', 'error');
+                updateStatus('join-status', '❌ 沒有房間可以進入', 'error');
+                return;
+            }
+
+            socket.emit('joinRoom', {
+                roomId: createdRoomId,
+                username: document.getElementById('testUsername').value,
+                password: null,
+                inviteToken: null
+            });
+
+            socket.on('joinedRoom', (data) => {
+                log(`📨 進入房間響應: ${JSON.stringify(data, null, 2)}`, 'info');
+                
+                if (data.success) {
+                    log('✅ 房間進入成功！', 'success');
+                    updateStatus('join-status', '✅ 進入房間成功', 'success');
+                    testResults.joining = true;
+                } else {
+                    log(`❌ 房間進入失敗: ${data.message}`, 'error');
+                    updateStatus('join-status', `❌ 進入失敗: ${data.message}`, 'error');
+                    testResults.joining = false;
+                }
+            });
+        }
+
+        function runFullTest() {
+            log('🔄 開始運行完整測試流程...', 'info');
+            updateStatus('full-test-status', '正在運行完整測試...', 'info');
+            testResults = {};
+
+            setTimeout(() => testConnection(), 500);
+            setTimeout(() => createTestRoom(), 2000);
+            setTimeout(() => testSessionStorage(), 4000);
+            setTimeout(() => testRoomJoining(), 6000);
+            setTimeout(() => {
+                const allPassed = Object.values(testResults).every(result => result === true);
+                if (allPassed) {
+                    log('🎉 所有測試通過！你可以安全地進入房間了。', 'success');
+                    updateStatus('full-test-status', `✅ 所有測試通過！房間ID: ${createdRoomId}`, 'success');
+                    
+                    // 添加進入房間的按鈕
+                    const enterBtn = document.createElement('button');
+                    enterBtn.textContent = '🚀 進入測試房間';
+                    enterBtn.className = 'success';
+                    enterBtn.onclick = () => {
+                        window.location.href = `room.html?id=${createdRoomId}`;
+                    };
+                    document.getElementById('full-test-status').appendChild(enterBtn);
+                } else {
+                    log('❌ 某些測試失敗了。請檢查上面的錯誤信息。', 'error');
+                    updateStatus('full-test-status', '❌ 測試失敗，請檢查錯誤', 'error');
+                }
+            }, 8000);
+        }
+
+        function goToActualHomepage() {
+            window.location.href = 'index.html';
+        }
+
+        function clearConsole() {
+            consoleOutput.textContent = '';
+        }
+
+        function downloadLog() {
+            const logContent = consoleOutput.textContent;
+            const blob = new Blob([logContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'kpop-debug-log.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        log('🎵 中文調試頁面已載入。點擊"測試連接"開始調試。', 'info');
+    </script>
+</body>
+</html>
