@@ -1,396 +1,709 @@
-// Homepage functionality
+// 首頁主要功能
 class HomePage {
     constructor() {
         this.socket = null;
-        
-        // Make this available globally
-        window.homepage = this;
-        
+        this.isConnected = false;
+        this.tempUsername = null; // 🔧 添加臨時用戶名儲存
         this.init();
     }
 
     init() {
+        console.log('🎵 K-Pop Watch Party 初始化中...');
+        
         this.initializeSocket();
         this.bindEvents();
         this.loadPublicRooms();
-        this.handleURLParams();
+        this.checkURLParams();
+        this.updateStats();
     }
 
+    // 初始化 Socket 連接
     initializeSocket() {
-        console.log('Connecting to server...');
-        this.socket = io();
-        
-        this.socket.on('connect', () => {
-            console.log('✅ Connected to server successfully!');
-        });
+        try {
+            this.socket = io();
+            
+            this.socket.on('connect', () => {
+                console.log('✅ 已連接到服務器');
+                this.isConnected = true;
+                this.showConnectionStatus('已連接', 'success');
+            });
 
-        this.socket.on('connect_error', (error) => {
-            console.error('❌ Connection failed:', error);
-            this.showError('Failed to connect to server. Please check if the server is running.');
-        });
+            this.socket.on('disconnect', () => {
+                console.log('❌ 與服務器斷開連接');
+                this.isConnected = false;
+                this.showConnectionStatus('連接中斷', 'error');
+            });
 
-        this.socket.on('publicRoomsUpdate', (rooms) => {
-            console.log('Received public rooms update:', rooms);
-            this.updatePublicRoomsList(rooms);
-        });
+            this.socket.on('connect_error', (error) => {
+                console.error('連接錯誤:', error);
+                this.showMessage('無法連接到服務器，請檢查網路連接', 'error');
+            });
 
-        this.socket.on('roomCreated', (data) => {
-            console.log('Room created:', data);
-            this.handleRoomCreated(data);
-        });
+            // 監聽房間創建結果
+            this.socket.on('roomCreated', (data) => {
+                this.handleRoomCreated(data);
+            });
 
-        this.socket.on('error', (error) => {
-            console.error('Socket error:', error);
-            this.showError(error.message);
-        });
+            // 監聽公開房間更新
+            this.socket.on('publicRooms', (rooms) => {
+                this.updatePublicRoomsList(rooms);
+            });
+
+          // 監聽加入房間結果
+            this.socket.on('joinedRoom', (data) => {
+                console.log('🔧 收到 joinedRoom 事件:', data);
+                this.handleJoinResult(data);
+            });
+
+        } catch (error) {
+            console.error('Socket 初始化失敗:', error);
+            this.showMessage('無法初始化連接，請重新整理頁面', 'error');
+        }
     }
 
+    // 綁定事件監聽器
     bindEvents() {
-        // Create room form
-        document.getElementById('createRoomForm').addEventListener('submit', (e) => {
-            this.handleCreateRoom(e);
-        });
+        // 檢查元素是否存在再綁定事件
+        const createRoomForm = document.getElementById('createRoomForm');
+        if (createRoomForm) {
+            createRoomForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.handleCreateRoom();
+            });
+        }
 
-        // Join private room form
-        document.getElementById('joinPrivateForm').addEventListener('submit', (e) => {
-            this.handleJoinPrivateRoom(e);
-        });
+        const joinPrivateForm = document.getElementById('joinPrivateForm');
+        if (joinPrivateForm) {
+            joinPrivateForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.handleJoinRoom();
+            });
+        }
 
-        // Room type selection
-        document.querySelectorAll('input[name="roomType"]').forEach(radio => {
+        // 房間類型切換
+        const roomTypeRadios = document.querySelectorAll('input[name="roomType"]');
+        console.log('🔧 找到房間類型選項數量:', roomTypeRadios.length);
+
+        roomTypeRadios.forEach(radio => {
             radio.addEventListener('change', (e) => {
-                this.togglePrivateOptions(e.target.value);
+                console.log('🔧 房間類型變更:', e.target.value);
+                this.togglePasswordField(e.target.value);
             });
         });
 
-        // Copy link button
-        document.getElementById('copyLinkBtn').addEventListener('click', () => {
-            this.copyInviteLink();
-        });
+        // 重新整理房間列表
+        const refreshBtn = document.getElementById('refreshRooms');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => {
+                this.loadPublicRooms();
+            });
+        }
 
-        // Enter room button
-        document.getElementById('enterRoomBtn').addEventListener('click', () => {
-            this.enterRoom();
-        });
+        // 彈窗相關
+        const copyLinkBtn = document.getElementById('copyLinkBtn');
+        if (copyLinkBtn) {
+            copyLinkBtn.addEventListener('click', () => {
+                this.copyInviteLink();
+            });
+        }
 
-        // Close modals
-        document.addEventListener('click', (e) => {
-            if (e.target.classList.contains('modal')) {
-                this.closeModal(e.target.id);
-            }
-        });
+        const enterRoomBtn = document.getElementById('enterRoomBtn');
+        if (enterRoomBtn) {
+            enterRoomBtn.addEventListener('click', () => {
+                this.enterRoom();
+            });
+        }
+
+        const closeModalBtn = document.getElementById('closeModalBtn');
+        if (closeModalBtn) {
+            closeModalBtn.addEventListener('click', () => {
+                this.closeModal();
+            });
+        }
+
+        // 點擊彈窗背景關閉
+        const modal = document.getElementById('inviteLinkModal');
+        if (modal) {
+            modal.addEventListener('click', (e) => {
+                if (e.target.id === 'inviteLinkModal') {
+                    this.closeModal();
+                }
+            });
+        }
     }
 
-    handleURLParams() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const roomId = urlParams.get('room');
-        const token = urlParams.get('token');
+    // 處理創建房間
+    handleCreateRoom() {
+        const username = document.getElementById('username')?.value?.trim();
+        const roomName = document.getElementById('roomName')?.value?.trim();
+        const roomTypeEl = document.querySelector('input[name="roomType"]:checked');
+        const roomType = roomTypeEl?.value || 'public';
         
-        if (roomId) {
-            // Auto-fill room ID if coming from invite link
-            document.getElementById('roomId').value = roomId;
-            if (token) {
-                // Store token for automatic join
-                sessionStorage.setItem('inviteToken', token);
-            }
+        // 🔧 修復密碼欄位讀取
+        let password = '';
+        if (roomType === 'private') {
+            const passwordEl = document.getElementById('roomPassword');
+            password = passwordEl?.value?.trim() || '';
+            console.log('🔧 私人房間密碼:', password ? '已設置' : '未設置');
         }
+
+        console.log('🔧 表單數據:', { username, roomName, roomType, hasPassword: !!password });
+
+        // 驗證輸入
+        if (!this.validateInput(username, roomName)) {
+            return;
+        }
+
+        if (!this.isConnected) {
+            this.showMessage('未連接到服務器，請稍後再試', 'error');
+            return;
+        }
+
+        // 顯示載入狀態
+        const submitBtn = document.querySelector('#createRoomForm button[type="submit"]');
+        if (submitBtn) {
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 創建中...';
+            submitBtn.disabled = true;
+
+            // 恢復按鈕狀態（3秒後）
+            setTimeout(() => {
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+            }, 3000);
+        }
+
+        // 發送創建房間請求
+        this.socket.emit('createRoom', {
+            username,
+            roomName,
+            roomType,
+            password: password || null
+        });
     }
 
-    handleCreateRoom(e) {
-        e.preventDefault();
-        
-        const formData = new FormData(e.target);
-        const roomData = {
-            username: formData.get('username').trim(),
-            roomName: formData.get('roomName').trim(),
-            roomType: formData.get('roomType'),
-            password: formData.get('roomPassword')?.trim() || null
-        };
+    // 處理加入房間
+    handleJoinRoom() {
+        const username = document.getElementById('joinUsername')?.value?.trim();
+        const roomInput = document.getElementById('roomId')?.value?.trim();
+        const password = document.getElementById('joinPassword')?.value?.trim();
 
-        // Validation
-        if (!roomData.username || !roomData.roomName) {
-            this.showError('Please fill in all required fields');
+        // 驗證輸入
+        if (!username || !roomInput) {
+            this.showMessage('請填寫暱稱和房間代碼', 'error');
             return;
         }
 
-        if (roomData.username.length < 2 || roomData.username.length > 20) {
-            this.showError('Username must be between 2-20 characters');
+        if (username.length < 2 || username.length > 20) {
+            this.showMessage('暱稱長度必須在 2-20 字符之間', 'error');
             return;
         }
 
-        if (roomData.roomName.length < 3 || roomData.roomName.length > 50) {
-            this.showError('Room name must be between 3-50 characters');
+        if (!this.isConnected) {
+            this.showMessage('未連接到服務器，請稍後再試', 'error');
             return;
         }
 
-        this.showLoading('Creating your room...');
-        this.socket.emit('createRoom', roomData);
+        // 提取房間ID（支援完整URL或純代碼）
+        const roomId = this.extractRoomId(roomInput);
+
+        // 顯示載入狀態
+        const submitBtn = document.querySelector('#joinPrivateForm button[type="submit"]');
+        if (submitBtn) {
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加入中...';
+            submitBtn.disabled = true;
+
+            setTimeout(() => {
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+            }, 3000);
+        }
+
+        // 發送加入房間請求
+        this.socket.emit('joinRoom', {
+            username,
+            roomId,
+            password: password || null
+        });
     }
 
-    handleJoinPrivateRoom(e) {
-        e.preventDefault();
-        
-        const formData = new FormData(e.target);
-        const joinData = {
-            username: formData.get('joinUsername').trim(),
-            roomId: this.extractRoomIdFromInput(formData.get('roomId').trim()),
-            password: formData.get('joinPassword')?.trim() || null
-        };
-
-        // Add invite token if available
-        const inviteToken = sessionStorage.getItem('inviteToken');
-        if (inviteToken) {
-            joinData.inviteToken = inviteToken;
-            sessionStorage.removeItem('inviteToken');
+    // 驗證輸入
+    validateInput(username, roomName) {
+        if (!username || !roomName) {
+            this.showMessage('請填寫所有必填欄位', 'error');
+            return false;
         }
 
-        // Validation
-        if (!joinData.username || !joinData.roomId) {
-            this.showError('Please fill in all required fields');
-            return;
+        if (username.length < 2 || username.length > 20) {
+            this.showMessage('暱稱長度必須在 2-20 字符之間', 'error');
+            return false;
         }
 
-        if (joinData.username.length < 2 || joinData.username.length > 20) {
-            this.showError('Username must be between 2-20 characters');
-            return;
+        if (roomName.length < 3 || roomName.length > 50) {
+            this.showMessage('房間名稱長度必須在 3-50 字符之間', 'error');
+            return false;
         }
 
-        this.showLoading('Joining room...');
-        this.socket.emit('joinRoom', joinData);
+        // 檢查特殊字符
+        const invalidChars = /[<>\"'&]/;
+        if (invalidChars.test(username) || invalidChars.test(roomName)) {
+            this.showMessage('暱稱和房間名稱不能包含特殊字符', 'error');
+            return false;
+        }
+
+        return true;
     }
 
-    extractRoomIdFromInput(input) {
-        // Extract room ID from URL or use as-is
-        const urlMatch = input.match(/room=([^&]+)/);
-        return urlMatch ? urlMatch[1] : input;
+    // 提取房間ID
+    extractRoomId(input) {
+        // 如果是完整URL，提取房間ID
+        const urlPattern = /room\.html\?id=([^&]+)/;
+        const match = input.match(urlPattern);
+        return match ? match[1] : input;
     }
 
+    // 處理房間創建結果
     handleRoomCreated(data) {
-        this.hideLoading();
-        console.log('Room creation response:', data);
-        
         if (data.success) {
-            // Store room data for the room page
+            console.log('房間創建成功:', data);
+
+            // 儲存房間資訊到 sessionStorage（包含密碼）
             const roomData = {
                 roomId: data.roomId,
                 username: data.username,
-                isHost: true
+                isHost: true,
+                roomName: data.roomName,
+                roomType: data.roomType
             };
-            
+
+            // 🔧 如果是私人房間，也要儲存密碼
+            if (data.roomType === 'private') {
+                const passwordEl = document.getElementById('roomPassword');
+                roomData.password = passwordEl?.value?.trim() || '';
+                console.log('🔧 儲存私人房間密碼到 sessionStorage');
+            }
+
             sessionStorage.setItem('roomData', JSON.stringify(roomData));
-            console.log('Stored room data:', roomData);
 
             if (data.roomType === 'private') {
-                // For private rooms, show invite link modal
-                this.showInviteLink(data.inviteLink, data.roomId);
+                // 私人房間顯示邀請連結
+                this.showSuccessModal(data.inviteLink, data.roomId);
             } else {
-                // For public rooms, redirect immediately
-                console.log('Redirecting to public room:', data.roomId);
+                // 公開房間直接進入
                 this.redirectToRoom(data.roomId);
             }
+
+            this.showMessage('房間創建成功！', 'success');
+            this.loadPublicRooms(); // 重新載入公開房間列表
         } else {
-            console.error('Room creation failed:', data.message);
-            this.showError(data.message || 'Failed to create room');
+            this.showMessage(data.message || '創建房間失敗', 'error');
         }
     }
 
-    showInviteLink(inviteLink, roomId) {
-        const modal = document.getElementById('inviteLinkModal');
-        const linkInput = document.getElementById('inviteLink');
+  // 處理加入房間結果
+// 處理加入房間結果
+handleJoinResult(data) {
+    console.log('🔧 處理加入房間結果:', data);
+
+    if (data.success) {
+        console.log('✅ 成功加入房間:', data);
         
-        linkInput.value = inviteLink;
-        modal.classList.remove('hidden');
+        // 🔧 優先使用臨時儲存的用戶名
+        const currentUsername = this.tempUsername || 
+                               this.getCurrentUsername() || 
+                               data.username || 
+                               '用戶';
         
-        // Store room ID for enter button
-        modal.dataset.roomId = roomId;
-    }
-
-    copyInviteLink() {
-        const linkInput = document.getElementById('inviteLink');
-        linkInput.select();
-        document.execCommand('copy');
+        console.log('🔧 使用的用戶名:', currentUsername);
         
-        const copyBtn = document.getElementById('copyLinkBtn');
-        const originalText = copyBtn.innerHTML;
-        copyBtn.innerHTML = '<i class="fas fa-check"></i> Copied!';
-        copyBtn.style.background = '#10b981';
+        // 儲存房間資訊
+        sessionStorage.setItem('roomData', JSON.stringify({
+            roomId: data.room.id,
+            username: currentUsername,
+            isHost: false,
+            roomName: data.room.name
+        }));
+
+        // 🔧 清除臨時用戶名
+        this.tempUsername = null;
+
+        this.redirectToRoom(data.room.id);
+        this.showMessage('成功加入房間！', 'success');
+    } else {
+        console.error('❌ 加入房間失敗:', data.message);
+        this.showMessage(data.message || '加入房間失敗', 'error');
         
-        setTimeout(() => {
-            copyBtn.innerHTML = originalText;
-            copyBtn.style.background = '';
-        }, 2000);
+        // 🔧 失敗時也清除臨時用戶名
+        this.tempUsername = null;
     }
+}
 
-    enterRoom() {
-        const modal = document.getElementById('inviteLinkModal');
-        const roomId = modal.dataset.roomId;
-        console.log('Enter room button clicked for room:', roomId);
-        this.closeModal('inviteLinkModal');
-        this.redirectToRoom(roomId);
-    }
+// 🔧 修改 getCurrentUsername 方法
+getCurrentUsername() {
+    // 優先從加入私人房間的輸入框獲取
+    const joinUsername = document.getElementById('joinUsername')?.value?.trim();
+    if (joinUsername) return joinUsername;
+    
+    // 如果沒有，返回空（公開房間會從 prompt 獲取）
+    return '';
+}
 
-    redirectToRoom(roomId) {
-        console.log('Redirecting to room:', roomId);
-        // Add a small delay to ensure session storage is saved
-        setTimeout(() => {
-            const newUrl = `room.html?id=${roomId}`;
-            console.log('Navigating to:', newUrl);
-            window.location.href = newUrl;
-        }, 500);
-    }
+// 🔧 添加獲取當前用戶名的方法
+getCurrentUsername() {
+    return document.getElementById('joinUsername')?.value?.trim() || '';
+}
 
-    togglePrivateOptions(roomType) {
-        const privateOptions = document.getElementById('privateOptions');
-        if (roomType === 'private') {
-            privateOptions.classList.remove('hidden');
-        } else {
-            privateOptions.classList.add('hidden');
-        }
-    }
-
+    // 載入公開房間列表
     loadPublicRooms() {
+        if (!this.isConnected) {
+            const roomsList = document.getElementById('publicRoomsList');
+            if (roomsList) {
+                roomsList.innerHTML = `
+                    <div class="loading-state">
+                        <i class="fas fa-exclamation-circle" style="font-size: 2rem; margin-bottom: 10px; opacity: 0.5;"></i>
+                        <p>未連接到服務器</p>
+                    </div>
+                `;
+            }
+            return;
+        }
+
+        const roomsList = document.getElementById('publicRoomsList');
+        if (roomsList) {
+            roomsList.innerHTML = `
+                <div class="loading-state">
+                    <div class="loading-spinner"></div>
+                    <p>正在載入房間...</p>
+                </div>
+            `;
+        }
+
         this.socket.emit('getPublicRooms');
     }
 
+    // 更新公開房間列表
     updatePublicRoomsList(rooms) {
-        const roomsList = document.getElementById('publicRoomsList');
-        
-        if (!rooms || rooms.length === 0) {
-            roomsList.innerHTML = `
-                <div class="no-rooms">
-                    <p>No public rooms available. Be the first to create one!</p>
-                </div>
-            `;
-            return;
-        }
+    const roomsList = document.getElementById('publicRoomsList');
+    if (!roomsList) return;
+    
+    if (!rooms || rooms.length === 0) {
+        roomsList.innerHTML = `
+            <div class="loading-state">
+                <i class="fas fa-home" style="font-size: 2rem; margin-bottom: 10px; opacity: 0.5;"></i>
+                <p>目前沒有公開房間</p>
+                <p style="font-size: 0.9rem; opacity: 0.7;">成為第一個創建房間的人！</p>
+            </div>
+        `;
+        return;
+    }
 
-        roomsList.innerHTML = rooms.map(room => `
-            <div class="room-item" onclick="homepage.joinPublicRoom('${room.id}', '${room.name}')">
-                <div class="room-item-header">
-                    <span class="room-name">${this.escapeHtml(room.name)}</span>
-                    <span class="room-users">👥 ${room.userCount} viewer${room.userCount !== 1 ? 's' : ''}</span>
-                </div>
-                <div class="room-status">
-                    <span class="status-indicator"></span>
-                    <span>Active • ${room.currentVideo ? 'Watching: ' + this.truncateText(room.currentVideo.title, 30) : 'No video'}</span>
+    // 🔧 修改為使用 data 屬性而不是 onclick
+    roomsList.innerHTML = rooms.map(room => `
+        <div class="room-item" 
+             data-room-id="${room.id}" 
+             data-room-name="${this.escapeHtml(room.name)}"
+             style="cursor: pointer;">
+            <div class="room-header">
+                <div class="room-name">${this.escapeHtml(room.name)}</div>
+                <div class="room-users">
+                    <i class="fas fa-users"></i>
+                    ${room.userCount}
                 </div>
             </div>
-        `).join('');
+            <div class="room-status">
+                <div class="status-dot"></div>
+                <span>正在播放: ${room.currentVideo ? this.escapeHtml(room.currentVideo) : '尚未開始'}</span>
+            </div>
+        </div>
+    `).join('');
+
+    // 🔧 添加點擊事件監聽器
+    const roomItems = roomsList.querySelectorAll('.room-item[data-room-id]');
+    roomItems.forEach(item => {
+        item.addEventListener('click', () => {
+            const roomId = item.dataset.roomId;
+            const roomName = item.dataset.roomName;
+            console.log('點擊公開房間:', roomId, roomName);
+            this.joinPublicRoom(roomId, roomName);
+        });
+    });
+}
+    // 加入公開房間
+    // 加入公開房間
+joinPublicRoom(roomId, roomName) {
+    console.log('🏠 嘗試加入公開房間:', roomId, roomName);
+    
+    const username = prompt(`加入房間「${roomName}」\n\n請輸入你的暱稱:`);
+    
+    if (!username) {
+        console.log('用戶取消加入房間');
+        return;
     }
 
-    joinPublicRoom(roomId, roomName) {
-        const username = prompt(`Enter your username to join "${roomName}":`);
-        if (!username || username.trim().length < 2) {
-            alert('Please enter a valid username (2+ characters)');
-            return;
-        }
-
-        // Store room data
-        sessionStorage.setItem('roomData', JSON.stringify({
-            roomId: roomId,
-            username: username.trim(),
-            isHost: false
-        }));
-
-        this.redirectToRoom(roomId);
+    if (username.length < 2 || username.length > 20) {
+        alert('暱稱長度必須在 2-20 字符之間');
+        return;
     }
 
-    showLoading(message) {
-        const modal = document.getElementById('loadingModal');
-        const messageEl = modal.querySelector('p');
-        messageEl.textContent = message;
-        modal.classList.remove('hidden');
+    // 🔧 檢查連接狀態
+    if (!this.isConnected) {
+        this.showMessage('未連接到服務器，請稍後再試', 'error');
+        return;
     }
+    // 🔧 儲存用戶名到臨時變數
+    this.tempUsername = username.trim();
+    
+    console.log('🚀 發送加入房間請求:', {
+        username: username.trim(),
+        roomId: roomId,
+        password: null
+    });
 
-    hideLoading() {
-        document.getElementById('loadingModal').classList.add('hidden');
-    }
+    // 🔧 直接通過 socket 加入房間
+    this.socket.emit('joinRoom', {
+        username: username.trim(),
+        roomId: roomId,
+        password: null
+    });
+}
 
-    closeModal(modalId) {
-        document.getElementById(modalId).classList.add('hidden');
-    }
-
-    showError(message) {
-        this.hideLoading();
+    // 🔧 修復切換密碼欄位顯示
+    togglePasswordField(roomType) {
+        const privateOptions = document.getElementById('privateOptions');
+        console.log('🔧 切換密碼欄位, roomType:', roomType, 'privateOptions元素:', privateOptions);
         
-        // Remove existing error messages
-        const existingError = document.querySelector('.message.error');
-        if (existingError) {
-            existingError.remove();
+        if (privateOptions) {
+            if (roomType === 'private') {
+                privateOptions.classList.remove('hidden');
+                console.log('✅ 顯示私人房間選項');
+            } else {
+                privateOptions.classList.add('hidden');
+                console.log('✅ 隱藏私人房間選項');
+            }
+        } else {
+            console.error('❌ 找不到 privateOptions 元素');
         }
-
-        // Create error message
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'message error';
-        errorDiv.innerHTML = `
-            <i class="fas fa-exclamation-circle"></i>
-            ${this.escapeHtml(message)}
-        `;
-
-        // Insert at top of main content
-        const mainContent = document.querySelector('.main-content');
-        mainContent.insertBefore(errorDiv, mainContent.firstChild);
-
-        // Auto-remove after 5 seconds
-        setTimeout(() => {
-            errorDiv.remove();
-        }, 5000);
     }
 
-    showSuccess(message) {
-        // Remove existing messages
-        const existingMessage = document.querySelector('.message');
+    // 顯示成功彈窗
+    showSuccessModal(inviteLink, roomId) {
+        const modal = document.getElementById('inviteLinkModal');
+        const linkInput = document.getElementById('inviteLink');
+        const enterBtn = document.getElementById('enterRoomBtn');
+        
+        if (modal && linkInput && enterBtn) {
+            linkInput.value = inviteLink;
+            enterBtn.dataset.roomId = roomId;
+            modal.classList.remove('hidden');
+        }
+    }
+
+    // 關閉彈窗
+    closeModal() {
+        const modal = document.getElementById('inviteLinkModal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+    }
+
+    // 複製邀請連結
+    copyInviteLink() {
+        const linkInput = document.getElementById('inviteLink');
+        if (!linkInput) return;
+
+        linkInput.select();
+        linkInput.setSelectionRange(0, 99999);
+
+        try {
+            document.execCommand('copy');
+            
+            const copyBtn = document.getElementById('copyLinkBtn');
+            if (copyBtn) {
+                const originalText = copyBtn.innerHTML;
+                copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                copyBtn.style.background = '#10b981';
+                
+                setTimeout(() => {
+                    copyBtn.innerHTML = originalText;
+                    copyBtn.style.background = '';
+                }, 2000);
+            }
+            
+            this.showMessage('邀請連結已複製到剪貼板', 'success');
+        } catch (err) {
+            console.error('複製失敗:', err);
+            this.showMessage('複製失敗，請手動複製連結', 'error');
+        }
+    }
+
+    // 進入房間
+    enterRoom() {
+        const enterBtn = document.getElementById('enterRoomBtn');
+        const roomId = enterBtn?.dataset?.roomId;
+        
+        if (roomId) {
+            this.closeModal();
+            this.redirectToRoom(roomId);
+        }
+    }
+
+    // 重定向到房間頁面
+    redirectToRoom(roomId) {
+        const url = `room.html?id=${encodeURIComponent(roomId)}`;
+        console.log('重定向到房間:', url);
+        window.location.href = url;
+    }
+
+    // 檢查URL參數（處理邀請連結）
+    checkURLParams() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = urlParams.get('room');
+        
+        if (roomId) {
+            const roomCodeInput = document.getElementById('roomId');
+            if (roomCodeInput) {
+                roomCodeInput.value = roomId;
+            }
+            
+            // 滾動到加入房間區域
+            const joinSection = document.querySelector('.join-private-section');
+            if (joinSection) {
+                joinSection.scrollIntoView({ behavior: 'smooth' });
+            }
+            
+            // 焦點到暱稱輸入框
+            setTimeout(() => {
+                const joinUsernameInput = document.getElementById('joinUsername');
+                if (joinUsernameInput) {
+                    joinUsernameInput.focus();
+                }
+            }, 500);
+        }
+    }
+
+    // 更新統計數據
+    updateStats() {
+        // 模擬統計數據更新
+        const updateStatsData = () => {
+            if (this.isConnected && this.socket) {
+                // 可以從服務器獲取實際統計數據
+                // this.socket.emit('getStats');
+            }
+            
+            // 暫時使用模擬數據
+            const totalRoomsEl = document.getElementById('totalRooms');
+            const totalUsersEl = document.getElementById('totalUsers');
+            
+            if (totalRoomsEl && totalUsersEl) {
+                // 這裡可以設置真實的統計數據
+                totalRoomsEl.textContent = Math.floor(Math.random() * 50) + 10;
+                totalUsersEl.textContent = Math.floor(Math.random() * 200) + 50;
+            }
+        };
+
+        updateStatsData();
+        setInterval(updateStatsData, 30000); // 每30秒更新一次
+    }
+
+    // 顯示連接狀態
+    showConnectionStatus(message, type) {
+        console.log(`連接狀態: ${message} (${type})`);
+    }
+
+    // 顯示訊息
+    showMessage(message, type = 'info') {
+        // 移除現有訊息
+        const existingMessage = document.querySelector('.toast-message');
         if (existingMessage) {
             existingMessage.remove();
         }
 
-        // Create success message
-        const successDiv = document.createElement('div');
-        successDiv.className = 'message success';
-        successDiv.innerHTML = `
-            <i class="fas fa-check-circle"></i>
+        // 創建新訊息
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `toast-message ${type}`;
+        
+        const icon = type === 'error' ? 'fas fa-exclamation-circle' : 
+                    type === 'success' ? 'fas fa-check-circle' : 
+                    'fas fa-info-circle';
+        
+        messageDiv.innerHTML = `
+            <i class="${icon}"></i>
             ${this.escapeHtml(message)}
         `;
 
-        // Insert at top of main content
-        const mainContent = document.querySelector('.main-content');
-        mainContent.insertBefore(successDiv, mainContent.firstChild);
+        // 添加樣式
+        messageDiv.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 16px 24px;
+            border-radius: 12px;
+            color: white;
+            font-weight: 600;
+            z-index: 4000;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            max-width: 400px;
+            box-shadow: 0 12px 24px rgba(0,0,0,0.15);
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+            cursor: pointer;
+            background: ${type === 'error' ? '#ef4444' : 
+                        type === 'success' ? '#10b981' : '#3b82f6'};
+        `;
 
-        // Auto-remove after 3 seconds
+        document.body.appendChild(messageDiv);
+
+        // 顯示動畫
         setTimeout(() => {
-            successDiv.remove();
-        }, 3000);
+            messageDiv.style.transform = 'translateX(0)';
+        }, 100);
+
+        // 自動移除
+        const duration = type === 'error' ? 5000 : 3000;
+        setTimeout(() => {
+            messageDiv.style.transform = 'translateX(100%)';
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.remove();
+                }
+            }, 300);
+        }, duration);
+
+        // 點擊移除
+        messageDiv.addEventListener('click', () => {
+            messageDiv.style.transform = 'translateX(100%)';
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.remove();
+                }
+            }, 300);
+        });
     }
 
+    // HTML轉義
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
 
-    truncateText(text, maxLength) {
-        if (text.length <= maxLength) return text;
-        return text.substring(0, maxLength) + '...';
+    // 格式化時間
+    formatTime(timestamp) {
+        return new Date(timestamp).toLocaleTimeString('zh-TW', {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
     }
 }
 
-// Initialize homepage when DOM is loaded
+// 頁面載入完成後初始化
 let homepage;
 document.addEventListener('DOMContentLoaded', () => {
     homepage = new HomePage();
 });
 
-// Handle page visibility changes
-document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && homepage) {
-        // Refresh public rooms when page becomes visible
-        homepage.loadPublicRooms();
-    }
-});
-
-// Auto-refresh public rooms every 30 seconds
-setInterval(() => {
-    if (homepage && !document.hidden) {
-        homepage.loadPublicRooms();
-    }
-}, 30000);
+// 導出供全域使用
+window.homepage = homepage;
