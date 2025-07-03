@@ -5,6 +5,7 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 
+
 // 配置
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -12,7 +13,14 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 // 創建應用
 const app = express();
 const server = http.createServer(app);
-
+function getBaseUrl() {
+    if (NODE_ENV === 'production') {
+        // Render 會自動設置這個環境變數
+        return `https://${process.env.RENDER_EXTERNAL_HOSTNAME || 'https://kpop-watch-party-1.onrender.com'}`;
+    } else {
+        return `http://localhost:${PORT}`;
+    }
+}
 // Socket.io 配置
 const io = socketIo(server, {
     cors: {
@@ -211,8 +219,32 @@ app.get('/api/stats', (req, res) => {
 });
 
 // Socket.io 連接處理
+// Socket.io 連接處理
 io.on('connection', (socket) => {
-    console.log(`用戶連接: ${socket.id}`);
+    console.log(`👤 用戶連接: ${socket.id} (總連接數: ${io.engine.clientsCount})`);
+
+    // 🔧 連接成功後立即發送公開房間列表
+    setTimeout(() => {
+        try {
+            const publicRooms = getPublicRooms();
+            console.log(`📤 向新用戶 ${socket.id} 發送公開房間列表: ${publicRooms.length} 個房間`);
+            socket.emit('publicRooms', publicRooms);
+        } catch (error) {
+            console.error('發送初始房間列表失敗:', error);
+        }
+    }, 500);
+
+    // 🔧 獲取公開房間列表
+    socket.on('getPublicRooms', () => {
+        try {
+            const publicRooms = getPublicRooms();
+            console.log(`📋 用戶 ${socket.id} 請求公開房間列表: ${publicRooms.length} 個房間`);
+            socket.emit('publicRooms', publicRooms);
+        } catch (error) {
+            console.error('處理 getPublicRooms 請求失敗:', error);
+            socket.emit('publicRooms', []);
+        }
+    });
 
     // 創建房間
     socket.on('createRoom', (data) => {
@@ -260,8 +292,10 @@ io.on('connection', (socket) => {
 
             logRoomAction(roomId, 'CREATED', username, `(${roomType})`);
 
-            // 生成邀請連結
-            const baseUrl = `http://localhost:${PORT}`;
+            // 🔧 修復邀請連結 - 使用生產環境 URL
+            const baseUrl = NODE_ENV === 'production' ? 
+                `https://${process.env.RENDER_EXTERNAL_HOSTNAME || 'your-app.onrender.com'}` : 
+                `http://localhost:${PORT}`;
             const inviteLink = `${baseUrl}/room.html?id=${roomId}`;
 
             // 響應創建成功
@@ -274,9 +308,12 @@ io.on('connection', (socket) => {
                 inviteLink: inviteLink
             });
 
-            // 廣播公開房間列表更新
+            // 🔧 廣播公開房間列表更新（使用兩個事件名稱確保兼容）
             if (roomType === 'public') {
-                io.emit('publicRooms', getPublicRooms());
+                const publicRooms = getPublicRooms();
+                io.emit('publicRooms', publicRooms);
+                io.emit('publicRoomsUpdate', publicRooms);
+                console.log('📢 廣播公開房間列表更新:', publicRooms.length, '個房間');
             }
 
         } catch (error) {
@@ -287,6 +324,8 @@ io.on('connection', (socket) => {
             });
         }
     });
+
+
 
     // 加入房間
     socket.on('joinRoom', (data) => {
@@ -376,8 +415,12 @@ io.on('connection', (socket) => {
             io.to(roomId).emit('usersUpdate', room.getUsersArray());
 
             // 更新公開房間列表
+            // 🔧 更新公開房間列表
             if (room.type === 'public') {
-                io.emit('publicRooms', getPublicRooms());
+                const publicRooms = getPublicRooms();
+                io.emit('publicRooms', publicRooms);
+                io.emit('publicRoomsUpdate', publicRooms);
+                console.log('📢 用戶離開，更新公開房間列表:', publicRooms.length, '個房間');
             }
 
         } catch (error) {
