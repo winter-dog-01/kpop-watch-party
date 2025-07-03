@@ -1,85 +1,95 @@
-// YouTube API integration
+// YouTube API 整合
 class YouTubePlayer {
     constructor() {
         this.player = null;
         this.isReady = false;
         this.currentVideoId = null;
         this.isHost = false;
-        this.syncInProgress = false;
-        this.lastSyncTime = 0;
         this.socket = null;
         this.roomManager = null;
+        this.syncInProgress = false;
+        this.lastSyncTime = 0;
+        this.syncTolerance = 3; // 同步容差秒數
+        this.heartbeatInterval = null;
         
-        // Make this available globally
+        // 播放狀態
+        this.playerState = {
+            currentTime: 0,
+            duration: 0,
+            isPlaying: false,
+            volume: 50
+        };
+        
+        // 全域可用
         window.youtubePlayer = this;
         
         this.init();
     }
 
     init() {
-        console.log('Initializing YouTube Player...');
+        console.log('🎬 初始化 YouTube 播放器...');
         
-        // YouTube API will call this when ready
+        // YouTube API 準備就緒回調
         window.onYouTubeIframeAPIReady = () => {
-            console.log('YouTube API ready, creating player...');
+            console.log('YouTube API 已載入');
             this.createPlayer();
         };
 
-        // If API is already loaded
+        // 如果 API 已經載入
         if (window.YT && window.YT.Player) {
-            console.log('YouTube API already loaded, creating player...');
+            console.log('YouTube API 已存在，直接創建播放器');
             this.createPlayer();
         } else {
-            console.log('Waiting for YouTube API to load...');
+            console.log('等待 YouTube API 載入...');
         }
     }
 
-    setSocket(socket) {
-        this.socket = socket;
-    }
-
-    setIsHost(isHost) {
-        this.isHost = isHost;
-    }
-
+    // 創建播放器
     createPlayer() {
-        this.player = new YT.Player('youtubePlayer', {
-            height: '100%',
-            width: '100%',
-            playerVars: {
-                'autoplay': 0,
-                'controls': 1,
-                'disablekb': 0,
-                'enablejsapi': 1,
-                'fs': 1,
-                'iv_load_policy': 3,
-                'modestbranding': 1,
-                'playsinline': 1,
-                'rel': 0
-            },
-            events: {
-                'onReady': (event) => this.onPlayerReady(event),
-                'onStateChange': (event) => this.onPlayerStateChange(event),
-                'onError': (event) => this.onPlayerError(event)
-            }
-        });
-    }
-
-    onPlayerReady(event) {
-        this.isReady = true;
-        console.log('YouTube player ready and connected!');
-        
-        // Connect to room manager if available
-        if (window.roomManager) {
-            this.setSocket(window.roomManager.socket);
-            this.setIsHost(window.roomManager.isHost);
-            this.roomManager = window.roomManager;
+        try {
+            this.player = new YT.Player('youtubePlayer', {
+                height: '100%',
+                width: '100%',
+                playerVars: {
+                    'autoplay': 0,
+                    'controls': 1,
+                    'disablekb': 0,
+                    'enablejsapi': 1,
+                    'fs': 1,
+                    'iv_load_policy': 3,
+                    'modestbranding': 1,
+                    'playsinline': 1,
+                    'rel': 0,
+                    'origin': window.location.origin
+                },
+                events: {
+                    'onReady': (event) => this.onPlayerReady(event),
+                    'onStateChange': (event) => this.onPlayerStateChange(event),
+                    'onError': (event) => this.onPlayerError(event)
+                }
+            });
+        } catch (error) {
+            console.error('創建 YouTube 播放器失敗:', error);
+            this.showError('無法創建 YouTube 播放器');
         }
-        
-        // Enable periodic sync checking
-        this.startSyncMonitoring();
     }
 
+    // 播放器準備就緒
+    onPlayerReady(event) {
+        console.log('✅ YouTube 播放器已準備就緒');
+        this.isReady = true;
+        
+        // 設置初始音量
+        this.player.setVolume(this.playerState.volume);
+        
+        // 開始心跳檢測
+        this.startHeartbeat();
+        
+        // 連接到房間管理器
+        this.connectToRoomManager();
+    }
+
+    // 播放狀態變化
     onPlayerStateChange(event) {
         const state = event.data;
         const stateNames = {
@@ -91,168 +101,245 @@ class YouTubePlayer {
             '5': 'cued'
         };
 
-        console.log('Player state changed:', stateNames[state] || state);
+        console.log('播放器狀態變化:', stateNames[state] || state);
 
-        // Only hosts can trigger sync events
+        // 更新內部狀態
+        this.updatePlayerState();
+
+        // 只有房主才能廣播狀態變化
         if (this.isHost && this.socket && !this.syncInProgress) {
-            const currentTime = this.getCurrentTime();
-            
-            switch (state) {
-                case YT.PlayerState.PLAYING:
-                    this.socket.emit('videoAction', {
-                        action: 'play',
-                        time: currentTime,
-                        videoId: this.currentVideoId
-                    });
-                    break;
-                    
-                case YT.PlayerState.PAUSED:
-                    this.socket.emit('videoAction', {
-                        action: 'pause',
-                        time: currentTime,
-                        videoId: this.currentVideoId
-                    });
-                    break;
-            }
+            this.broadcastPlayerAction(state);
         }
 
-        // Handle video end
-        if (state === YT.PlayerState.ENDED) {
-            this.onVideoEnded();
-        }
+        // 處理特殊狀態
+        this.handleStateChange(state);
     }
 
+    // 播放器錯誤處理
     onPlayerError(event) {
         const errorCodes = {
-            2: 'Invalid video ID',
-            5: 'HTML5 player error',
-            100: 'Video not found or private',
-            101: 'Video not allowed in embedded players',
-            150: 'Video not allowed in embedded players'
+            2: '無效的影片 ID',
+            5: 'HTML5 播放器錯誤', 
+            100: '影片不存在或為私人影片',
+            101: '影片不允許嵌入播放',
+            150: '影片不允許嵌入播放'
         };
 
-        const errorMessage = errorCodes[event.data] || 'Unknown error';
-        console.error('YouTube player error:', errorMessage);
-        
-        if (window.roomManager) {
-            window.roomManager.showError(`Video error: ${errorMessage}`);
-        }
+        const errorMessage = errorCodes[event.data] || '未知錯誤';
+        console.error('YouTube 播放器錯誤:', errorMessage, event.data);
+        this.showError(`影片載入錯誤: ${errorMessage}`);
     }
 
+    // 載入影片
     loadVideo(videoData) {
         if (!this.isReady) {
-            console.warn('Player not ready yet');
+            console.warn('播放器尚未準備就緒');
+            setTimeout(() => this.loadVideo(videoData), 1000);
             return;
         }
 
-        this.currentVideoId = videoData.videoId;
-        
         try {
-            // Load the video
+            this.currentVideoId = videoData.videoId;
+            
+            console.log('載入影片:', videoData);
+            
+            // 載入影片
             this.player.loadVideoById({
                 videoId: videoData.videoId,
                 startSeconds: videoData.startTime || 0
             });
 
-            // Update video info if available
-            if (videoData.title) {
-                this.updateVideoInfo(videoData);
-            } else {
-                // Fetch video info from YouTube API
-                this.fetchVideoInfo(videoData.videoId);
-            }
+            // 更新界面
+            this.updateVideoInfo(videoData);
+            
+            // 顯示影片信息區域
+            document.getElementById('videoInfo').classList.remove('hidden');
 
         } catch (error) {
-            console.error('Error loading video:', error);
-            if (window.roomManager) {
-                window.roomManager.showError('Failed to load video');
-            }
+            console.error('載入影片失敗:', error);
+            this.showError('載入影片失敗');
         }
     }
 
-    async fetchVideoInfo(videoId) {
+    // 更新影片信息
+    updateVideoInfo(videoData) {
+        const titleElement = document.getElementById('videoTitle');
+        if (titleElement) {
+            titleElement.textContent = videoData.title || '載入中...';
+        }
+
+        // 如果沒有標題，嘗試獲取
+        if (!videoData.title && this.currentVideoId) {
+            this.fetchVideoTitle(this.currentVideoId);
+        }
+    }
+
+    // 獲取影片標題
+    async fetchVideoTitle(videoId) {
         try {
-            // Use YouTube oEmbed API to get video info
-            const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+            // 使用 YouTube oEmbed API
+            const response = await fetch(
+                `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
+            );
             
             if (response.ok) {
                 const data = await response.json();
-                this.updateVideoInfo({
-                    videoId: videoId,
-                    title: data.title,
-                    author: data.author_name,
-                    thumbnail: data.thumbnail_url
-                });
+                const titleElement = document.getElementById('videoTitle');
+                if (titleElement) {
+                    titleElement.textContent = data.title;
+                }
+                
+                // 通知房間管理器更新標題
+                if (this.roomManager) {
+                    this.roomManager.updateVideoTitle(data.title);
+                }
             }
         } catch (error) {
-            console.error('Error fetching video info:', error);
+            console.error('獲取影片標題失敗:', error);
         }
     }
 
-    updateVideoInfo(videoData) {
-        const videoTitle = document.getElementById('videoTitle');
-        if (videoTitle) {
-            videoTitle.textContent = videoData.title || 'Unknown Video';
-        }
-
-        // Store video data for sync purposes
-        this.currentVideoData = videoData;
-    }
-
-    sync(syncData) {
-        if (!this.isReady || !this.currentVideoId) {
+    // 同步播放狀態
+    syncWithData(syncData) {
+        if (!this.isReady || !this.currentVideoId || this.isHost) {
             return;
         }
 
+        console.log('收到同步數據:', syncData);
+
         this.syncInProgress = true;
-        
+
         try {
             const currentTime = this.getCurrentTime();
             const targetTime = syncData.time;
             const timeDiff = Math.abs(currentTime - targetTime);
 
-            // Only sync if difference is significant (more than 2 seconds)
-            if (timeDiff > 2) {
-                this.player.seekTo(targetTime, true);
+            // 檢查是否需要跳轉
+            if (timeDiff > this.syncTolerance) {
+                console.log(`時間差異 ${timeDiff.toFixed(2)}s，執行跳轉到 ${targetTime.toFixed(2)}s`);
+                this.seekTo(targetTime);
             }
 
-            // Sync playback state
-            if (syncData.isPlaying && this.getPlayerState() !== YT.PlayerState.PLAYING) {
-                this.player.playVideo();
-            } else if (!syncData.isPlaying && this.getPlayerState() === YT.PlayerState.PLAYING) {
-                this.player.pauseVideo();
-            }
+            // 同步播放狀態
+            setTimeout(() => {
+                if (syncData.isPlaying && !this.isPlaying()) {
+                    console.log('同步播放');
+                    this.play();
+                } else if (!syncData.isPlaying && this.isPlaying()) {
+                    console.log('同步暫停');
+                    this.pause();
+                }
+            }, 500); // 等待跳轉完成
 
             this.lastSyncTime = Date.now();
             
+            // 更新同步狀態顯示
+            this.updateSyncStatus('已同步');
+
         } catch (error) {
-            console.error('Error during sync:', error);
+            console.error('同步失敗:', error);
+            this.updateSyncStatus('同步失敗', 'error');
         } finally {
-            // Reset sync flag after a delay
+            // 重置同步標記
             setTimeout(() => {
                 this.syncInProgress = false;
             }, 1000);
         }
     }
 
-    startSyncMonitoring() {
-        // Check for drift every 10 seconds
-        setInterval(() => {
-            if (this.isHost && this.socket && this.currentVideoId) {
-                this.broadcastCurrentState();
-            }
-        }, 10000);
+    // 廣播播放器動作
+    broadcastPlayerAction(state) {
+        if (!this.socket) return;
 
-        // More frequent checks during playback
-        setInterval(() => {
-            if (this.isHost && this.socket && this.currentVideoId && this.isPlaying()) {
-                this.broadcastCurrentState();
-            }
-        }, 5000);
+        const currentTime = this.getCurrentTime();
+        let action = '';
+
+        switch (state) {
+            case YT.PlayerState.PLAYING:
+                action = 'play';
+                break;
+            case YT.PlayerState.PAUSED:
+                action = 'pause';
+                break;
+            case YT.PlayerState.ENDED:
+                action = 'ended';
+                break;
+            default:
+                return; // 不廣播其他狀態
+        }
+
+        console.log(`廣播動作: ${action} at ${currentTime.toFixed(2)}s`);
+
+        this.socket.emit('videoAction', {
+            action: action,
+            time: currentTime,
+            videoId: this.currentVideoId,
+            timestamp: Date.now()
+        });
     }
 
+    // 處理狀態變化
+    handleStateChange(state) {
+        switch (state) {
+            case YT.PlayerState.PLAYING:
+                this.updateSyncStatus('播放中');
+                break;
+            case YT.PlayerState.PAUSED:
+                this.updateSyncStatus('已暫停');
+                break;
+            case YT.PlayerState.ENDED:
+                this.updateSyncStatus('播放結束');
+                if (this.roomManager) {
+                    this.roomManager.onVideoEnded();
+                }
+                break;
+            case YT.PlayerState.BUFFERING:
+                this.updateSyncStatus('緩衝中...');
+                break;
+        }
+    }
+
+    // 更新播放器狀態
+    updatePlayerState() {
+        if (!this.isReady) return;
+
+        try {
+            this.playerState = {
+                currentTime: this.getCurrentTime(),
+                duration: this.getDuration(),
+                isPlaying: this.isPlaying(),
+                volume: this.getVolume()
+            };
+        } catch (error) {
+            console.error('更新播放器狀態失敗:', error);
+        }
+    }
+
+    // 開始心跳檢測
+    startHeartbeat() {
+        // 清除現有心跳
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+        }
+
+        // 房主定期廣播狀態
+        if (this.isHost) {
+            this.heartbeatInterval = setInterval(() => {
+                this.broadcastCurrentState();
+            }, 5000); // 每5秒廣播一次
+        }
+
+        // 所有用戶定期更新狀態
+        setInterval(() => {
+            this.updatePlayerState();
+        }, 1000);
+    }
+
+    // 廣播當前狀態
     broadcastCurrentState() {
-        if (!this.socket || this.syncInProgress) return;
+        if (!this.socket || !this.currentVideoId || this.syncInProgress) {
+            return;
+        }
 
         try {
             const currentTime = this.getCurrentTime();
@@ -264,11 +351,66 @@ class YouTubePlayer {
                 isPlaying: isPlaying,
                 timestamp: Date.now()
             });
+
         } catch (error) {
-            console.error('Error broadcasting state:', error);
+            console.error('廣播狀態失敗:', error);
         }
     }
 
+    // 連接到房間管理器
+    connectToRoomManager() {
+        const checkRoomManager = () => {
+            if (window.roomManager) {
+                this.roomManager = window.roomManager;
+                this.socket = this.roomManager.socket;
+                this.isHost = this.roomManager.isHost;
+                
+                console.log('已連接到房間管理器');
+                console.log('是否為房主:', this.isHost);
+                
+                // 重新啟動心跳
+                this.startHeartbeat();
+            } else {
+                setTimeout(checkRoomManager, 500);
+            }
+        };
+        checkRoomManager();
+    }
+
+    // 播放控制方法
+    play() {
+        if (this.isReady && this.player) {
+            this.player.playVideo();
+        }
+    }
+
+    pause() {
+        if (this.isReady && this.player) {
+            this.player.pauseVideo();
+        }
+    }
+
+    stop() {
+        if (this.isReady && this.player) {
+            this.player.stopVideo();
+        }
+    }
+
+    seekTo(seconds) {
+        if (this.isReady && this.player) {
+            this.player.seekTo(seconds, true);
+        }
+    }
+
+    setVolume(volume) {
+        if (this.isReady && this.player) {
+            const vol = Math.max(0, Math.min(100, volume));
+            this.player.setVolume(vol);
+            this.playerState.volume = vol;
+        }
+    }
+
+    // 獲取播放器信息
     getCurrentTime() {
         try {
             return this.player ? this.player.getCurrentTime() : 0;
@@ -282,6 +424,14 @@ class YouTubePlayer {
             return this.player ? this.player.getDuration() : 0;
         } catch (error) {
             return 0;
+        }
+    }
+
+    getVolume() {
+        try {
+            return this.player ? this.player.getVolume() : 50;
+        } catch (error) {
+            return 50;
         }
     }
 
@@ -301,61 +451,43 @@ class YouTubePlayer {
         return this.getPlayerState() === YT.PlayerState.PAUSED;
     }
 
-    play() {
-        if (this.isReady && this.player) {
-            this.player.playVideo();
-        }
+    isBuffering() {
+        return this.getPlayerState() === YT.PlayerState.BUFFERING;
     }
 
-    pause() {
-        if (this.isReady && this.player) {
-            this.player.pauseVideo();
+    // URL 處理
+    extractVideoId(url) {
+        if (!url) return null;
+
+        const patterns = [
+            /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+            /youtube\.com\/watch\?.*v=([^&\n?#]+)/,
+            /youtube\.com\/v\/([^&\n?#]+)/,
+            /youtu\.be\/([^&\n?#]+)/
+        ];
+
+        for (const pattern of patterns) {
+            const match = url.match(pattern);
+            if (match && match[1]) {
+                return match[1].split('&')[0].split('#')[0].split('?')[0];
+            }
         }
+
+        return null;
     }
 
-    seekTo(time) {
-        if (this.isReady && this.player) {
-            this.player.seekTo(time, true);
-        }
+    isValidYouTubeUrl(url) {
+        const videoId = this.extractVideoId(url);
+        return videoId !== null && videoId.length === 11;
     }
 
-    setVolume(volume) {
-        if (this.isReady && this.player) {
-            this.player.setVolume(Math.max(0, Math.min(100, volume)));
-        }
-    }
-
-    getVolume() {
-        try {
-            return this.player ? this.player.getVolume() : 50;
-        } catch (error) {
-            return 50;
-        }
-    }
-
-    onVideoEnded() {
-        if (this.isHost && this.socket) {
-            this.socket.emit('videoAction', {
-                action: 'ended',
-                videoId: this.currentVideoId
-            });
-        }
-
-        // Show video ended message
-        if (window.roomManager) {
-            window.roomManager.addChatMessage({
-                type: 'system',
-                message: 'Video ended',
-                timestamp: Date.now()
-            });
-        }
-    }
-
-    // Handle external video actions (from other users)
+    // 處理外部視頻動作
     handleVideoAction(actionData) {
         if (this.isHost || !this.isReady) {
-            return; // Hosts don't respond to external actions
+            return; // 房主不響應外部動作
         }
+
+        console.log('處理外部視頻動作:', actionData);
 
         this.syncInProgress = true;
 
@@ -365,22 +497,22 @@ class YouTubePlayer {
                     this.seekTo(actionData.time);
                     setTimeout(() => this.play(), 100);
                     break;
-                    
+
                 case 'pause':
                     this.seekTo(actionData.time);
                     this.pause();
                     break;
-                    
+
                 case 'seek':
                     this.seekTo(actionData.time);
                     break;
-                    
+
                 case 'ended':
-                    // Handle video end
+                    // 處理播放結束
                     break;
             }
         } catch (error) {
-            console.error('Error handling video action:', error);
+            console.error('處理視頻動作失敗:', error);
         } finally {
             setTimeout(() => {
                 this.syncInProgress = false;
@@ -388,12 +520,40 @@ class YouTubePlayer {
         }
     }
 
-    // Utility methods
+    // 更新同步狀態顯示
+    updateSyncStatus(message, type = 'success') {
+        const statusElement = document.getElementById('syncStatus');
+        if (statusElement) {
+            statusElement.textContent = message;
+            statusElement.className = `sync-status ${type}`;
+
+            // 自動恢復默認狀態
+            if (type !== 'default') {
+                setTimeout(() => {
+                    statusElement.textContent = '已同步';
+                    statusElement.className = 'sync-status';
+                }, 3000);
+            }
+        }
+    }
+
+    // 請求同步
+    requestSync() {
+        if (this.socket) {
+            console.log('請求同步');
+            this.socket.emit('requestSync', {
+                roomId: this.roomManager?.roomData?.roomId
+            });
+            this.updateSyncStatus('同步中...', 'info');
+        }
+    }
+
+    // 格式化時間
     formatTime(seconds) {
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
         const secs = Math.floor(seconds % 60);
-        
+
         if (hours > 0) {
             return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
         } else {
@@ -401,13 +561,14 @@ class YouTubePlayer {
         }
     }
 
-    getVideoProgress() {
-        const currentTime = this.getCurrentTime();
+    // 獲取播放進度百分比
+    getProgress() {
         const duration = this.getDuration();
+        const currentTime = this.getCurrentTime();
         return duration > 0 ? (currentTime / duration) * 100 : 0;
     }
 
-    // Quality control
+    // 品質控制
     getAvailableQualityLevels() {
         try {
             return this.player ? this.player.getAvailableQualityLevels() : [];
@@ -430,40 +591,122 @@ class YouTubePlayer {
         }
     }
 
-    // Event listeners for external control
-    onSeek(callback) {
-        this.onSeekCallback = callback;
+    // 錯誤處理和用戶提示
+    showError(message) {
+        console.error('YouTube Player Error:', message);
+        if (this.roomManager) {
+            this.roomManager.showMessage(message, 'error');
+        }
     }
 
-    onPlay(callback) {
-        this.onPlayCallback = callback;
+    showSuccess(message) {
+        console.log('YouTube Player Success:', message);
+        if (this.roomManager) {
+            this.roomManager.showMessage(message, 'success');
+        }
     }
 
-    onPause(callback) {
-        this.onPauseCallback = callback;
+    // 鍵盤快捷鍵
+    setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // 只在不是輸入框時響應
+            if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                switch (e.key.toLowerCase()) {
+                    case ' ': // 空格鍵播放/暫停
+                        e.preventDefault();
+                        if (this.isHost) {
+                            if (this.isPlaying()) {
+                                this.pause();
+                            } else {
+                                this.play();
+                            }
+                        }
+                        break;
+
+                    case 'arrowleft': // 左箭頭後退10秒
+                        e.preventDefault();
+                        if (this.isHost) {
+                            this.seekTo(Math.max(0, this.getCurrentTime() - 10));
+                        }
+                        break;
+
+                    case 'arrowright': // 右箭頭前進10秒
+                        e.preventDefault();
+                        if (this.isHost) {
+                            this.seekTo(this.getCurrentTime() + 10);
+                        }
+                        break;
+
+                    case 'arrowup': // 上箭頭增加音量
+                        e.preventDefault();
+                        this.setVolume(Math.min(100, this.getVolume() + 10));
+                        break;
+
+                    case 'arrowdown': // 下箭頭減少音量
+                        e.preventDefault();
+                        this.setVolume(Math.max(0, this.getVolume() - 10));
+                        break;
+
+                    case 'm': // M鍵靜音/取消靜音
+                        e.preventDefault();
+                        if (this.getVolume() > 0) {
+                            this.previousVolume = this.getVolume();
+                            this.setVolume(0);
+                        } else {
+                            this.setVolume(this.previousVolume || 50);
+                        }
+                        break;
+
+                    case 's': // S鍵請求同步
+                        e.preventDefault();
+                        this.requestSync();
+                        break;
+                }
+            }
+        });
     }
 
-    // Cleanup
+    // 銷毀播放器
     destroy() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+        }
+
         if (this.player) {
             try {
                 this.player.destroy();
             } catch (error) {
-                console.error('Error destroying player:', error);
+                console.error('銷毀播放器失敗:', error);
             }
-            this.player = null;
         }
+
+        this.player = null;
         this.isReady = false;
         this.currentVideoId = null;
     }
+
+    // 獲取播放器統計信息
+    getStats() {
+        return {
+            isReady: this.isReady,
+            currentVideoId: this.currentVideoId,
+            isHost: this.isHost,
+            syncInProgress: this.syncInProgress,
+            lastSyncTime: this.lastSyncTime,
+            playerState: this.playerState,
+            currentTime: this.getCurrentTime(),
+            duration: this.getDuration(),
+            isPlaying: this.isPlaying()
+        };
+    }
 }
 
-// Initialize YouTube player
+// 初始化 YouTube 播放器
 window.youtubePlayer = new YouTubePlayer();
 
-// Make it available globally for room manager
-window.addEventListener('DOMContentLoaded', () => {
-    if (window.roomManager) {
-        window.youtubePlayer.setSocket(window.roomManager.socket);
+// 設置鍵盤快捷鍵
+document.addEventListener('DOMContentLoaded', () => {
+    if (window.youtubePlayer) {
+        window.youtubePlayer.setupKeyboardShortcuts();
     }
 });
