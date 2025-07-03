@@ -17,50 +17,112 @@ class HomePage {
         this.updateStats();
     }
 
-    // 初始化 Socket 連接
-    initializeSocket() {
-        try {
-            this.socket = io();
+initializeSocket() {
+    try {
+        console.log('🔗 正在建立 Socket 連接...');
+        
+        // 🔧 改善 Socket.io 連接配置
+        this.socket = io({
+            transports: ['websocket', 'polling'],
+            timeout: 20000,
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionAttempts: 5,
+            autoConnect: true
+        });
+        
+        this.socket.on('connect', () => {
+            console.log('✅ 已連接到服務器, Socket ID:', this.socket.id);
+            this.isConnected = true;
+            this.showConnectionStatus('已連接', 'success');
             
-            this.socket.on('connect', () => {
-                console.log('✅ 已連接到服務器');
-                this.isConnected = true;
-                this.showConnectionStatus('已連接', 'success');
-            });
+            // 🔧 連接成功後立即載入公開房間列表
+            setTimeout(() => {
+                console.log('📋 載入公開房間列表...');
+                this.loadPublicRooms();
+            }, 1000);
+        });
 
-            this.socket.on('disconnect', () => {
-                console.log('❌ 與服務器斷開連接');
-                this.isConnected = false;
-                this.showConnectionStatus('連接中斷', 'error');
-            });
+        this.socket.on('disconnect', (reason) => {
+            console.log('❌ 與服務器斷開連接, 原因:', reason);
+            this.isConnected = false;
+            this.showConnectionStatus('連接中斷', 'error');
+            this.updatePublicRoomsListOffline();
+        });
 
-            this.socket.on('connect_error', (error) => {
-                console.error('連接錯誤:', error);
-                this.showMessage('無法連接到服務器，請檢查網路連接', 'error');
-            });
+        this.socket.on('connect_error', (error) => {
+            console.error('❌ 連接錯誤:', error);
+            this.isConnected = false;
+            this.showMessage('無法連接到服務器，請檢查網路連接', 'error');
+            this.updatePublicRoomsListOffline();
+        });
 
-            // 監聽房間創建結果
-            this.socket.on('roomCreated', (data) => {
-                this.handleRoomCreated(data);
-            });
+        // 🔧 重連事件
+        this.socket.on('reconnect', (attemptNumber) => {
+            console.log(`🔄 重新連接成功 (嘗試 ${attemptNumber} 次)`);
+            this.isConnected = true;
+            this.showMessage('重新連接成功！', 'success');
+            this.loadPublicRooms();
+        });
 
-            // 監聽公開房間更新
-            this.socket.on('publicRooms', (rooms) => {
-                this.updatePublicRoomsList(rooms);
-            });
+        this.socket.on('reconnect_attempt', (attemptNumber) => {
+            console.log(`🔄 嘗試重新連接... (第 ${attemptNumber} 次)`);
+        });
 
-          // 監聽加入房間結果
-            this.socket.on('joinedRoom', (data) => {
-                console.log('🔧 收到 joinedRoom 事件:', data);
-                this.handleJoinResult(data);
-            });
+        this.socket.on('reconnect_error', (error) => {
+            console.error('🔄 重連失敗:', error);
+        });
 
-        } catch (error) {
-            console.error('Socket 初始化失敗:', error);
-            this.showMessage('無法初始化連接，請重新整理頁面', 'error');
-        }
+        this.socket.on('reconnect_failed', () => {
+            console.error('🔄 重連完全失敗');
+            this.showMessage('無法重新連接到服務器', 'error');
+        });
+
+        // 監聽房間創建結果
+        this.socket.on('roomCreated', (data) => {
+            this.handleRoomCreated(data);
+        });
+
+        // 監聽公開房間更新
+        this.socket.on('publicRooms', (rooms) => {
+            console.log('🏠 收到公開房間列表:', rooms);
+            this.updatePublicRoomsList(rooms);
+        });
+
+        this.socket.on('publicRoomsUpdate', (rooms) => {
+            console.log('🔄 公開房間列表更新:', rooms);
+            this.updatePublicRoomsList(rooms);
+        });
+
+        // 監聽加入房間結果
+        this.socket.on('joinedRoom', (data) => {
+            console.log('🔧 收到 joinedRoom 事件:', data);
+            this.handleJoinResult(data);
+        });
+
+    } catch (error) {
+        console.error('Socket 初始化失敗:', error);
+        this.showMessage('無法初始化連接，請重新整理頁面', 'error');
+        this.updatePublicRoomsListOffline();
     }
+}
 
+// 🔧 添加離線狀態顯示方法
+updatePublicRoomsListOffline() {
+    const roomsList = document.getElementById('publicRoomsList');
+    if (roomsList) {
+        roomsList.innerHTML = `
+            <div class="loading-state">
+                <i class="fas fa-exclamation-circle" style="font-size: 2rem; margin-bottom: 10px; opacity: 0.5; color: #ef4444;"></i>
+                <p style="color: #ef4444;">未連接到服務器</p>
+                <p style="font-size: 0.9rem; opacity: 0.7;">正在嘗試重新連接...</p>
+                <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: #6366f1; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                    重新載入頁面
+                </button>
+            </div>
+        `;
+    }
+}
     // 綁定事件監聽器
     bindEvents() {
         // 檢查元素是否存在再綁定事件
@@ -354,33 +416,49 @@ getCurrentUsername() {
     return document.getElementById('joinUsername')?.value?.trim() || '';
 }
 
-    // 載入公開房間列表
-    loadPublicRooms() {
-        if (!this.isConnected) {
-            const roomsList = document.getElementById('publicRoomsList');
-            if (roomsList) {
-                roomsList.innerHTML = `
-                    <div class="loading-state">
-                        <i class="fas fa-exclamation-circle" style="font-size: 2rem; margin-bottom: 10px; opacity: 0.5;"></i>
-                        <p>未連接到服務器</p>
-                    </div>
-                `;
-            }
-            return;
-        }
-
-        const roomsList = document.getElementById('publicRoomsList');
-        if (roomsList) {
-            roomsList.innerHTML = `
-                <div class="loading-state">
-                    <div class="loading-spinner"></div>
-                    <p>正在載入房間...</p>
-                </div>
-            `;
-        }
-
-        this.socket.emit('getPublicRooms');
+// 載入公開房間列表
+loadPublicRooms() {
+    console.log('📋 載入公開房間列表, 連接狀態:', this.isConnected);
+    
+    if (!this.isConnected) {
+        console.warn('⚠️ 未連接到服務器，跳過載入房間列表');
+        this.updatePublicRoomsListOffline();
+        return;
     }
+
+    if (!this.socket) {
+        console.error('❌ Socket 對象不存在');
+        this.updatePublicRoomsListOffline();
+        return;
+    }
+
+    const roomsList = document.getElementById('publicRoomsList');
+    if (roomsList) {
+        roomsList.innerHTML = `
+            <div class="loading-state">
+                <div class="loading-spinner"></div>
+                <p>正在載入房間...</p>
+            </div>
+        `;
+    }
+
+    try {
+        console.log('📤 發送 getPublicRooms 請求');
+        this.socket.emit('getPublicRooms');
+        
+        // 🔧 設置超時處理
+        setTimeout(() => {
+            if (!this.isConnected) {
+                console.warn('⏰ 載入房間列表超時');
+                this.updatePublicRoomsListOffline();
+            }
+        }, 5000);
+        
+    } catch (error) {
+        console.error('❌ 發送 getPublicRooms 請求失敗:', error);
+        this.updatePublicRoomsListOffline();
+    }
+}
 
     // 更新公開房間列表
     updatePublicRoomsList(rooms) {
