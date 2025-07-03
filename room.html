@@ -1,181 +1,239 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>K-Pop Watch Party - Room</title>
-    <link rel="stylesheet" href="css/styles.css">
+    <title>🎵 K-Pop Watch Party - 房間</title>
     <link rel="stylesheet" href="css/room.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
+    <!-- 彈幕容器 - 覆蓋整個頁面 -->
     <div id="danmuContainer" class="danmu-container"></div>
     
-    <div class="room-container">
+    <div class="room-layout">
+        <!-- 頂部導航 -->
         <header class="room-header">
             <div class="room-info">
-                <h1 id="roomTitle">Room Name</h1>
-                <div class="room-details">
-                    <span id="userCount" class="user-count">👥 1 viewer</span>
+                <h1 id="roomTitle" class="room-title">載入中...</h1>
+                <div class="room-meta">
+                    <span id="userCount" class="user-count">
+                        <i class="fas fa-users"></i> 1 人
+                    </span>
                     <span id="roomId" class="room-id"></span>
+                    <span id="hostBadge" class="host-badge hidden">
+                        <i class="fas fa-crown"></i> 房主
+                    </span>
                 </div>
             </div>
-            <div class="header-controls">
-                <button id="customizeBtn" class="control-btn">
-                    <i class="fas fa-palette"></i> Customize
+            <div class="room-controls">
+                <button id="customizeBtn" class="control-btn" title="自定義房間">
+                    <i class="fas fa-palette"></i>
                 </button>
-                <button id="inviteBtn" class="control-btn">
-                    <i class="fas fa-share"></i> Invite
+                <button id="inviteBtn" class="control-btn" title="邀請朋友">
+                    <i class="fas fa-share"></i>
                 </button>
-                <button id="leaveBtn" class="control-btn leave-btn">
-                    <i class="fas fa-sign-out-alt"></i> Leave
+                <button id="toggleDanmuBtn" class="control-btn danmu-active" title="切換彈幕">
+                    <i class="fas fa-comment"></i>
+                </button>
+                <button id="leaveBtn" class="control-btn leave-btn" title="離開房間">
+                    <i class="fas fa-sign-out-alt"></i>
                 </button>
             </div>
         </header>
 
-        <div class="main-content">
-            <div class="video-section">
+        <!-- 主要內容區域 -->
+        <main class="main-content">
+            <!-- 視頻區域 -->
+            <section class="video-section">
+                <!-- YouTube URL 輸入 -->
                 <div class="video-controls">
-                    <div class="url-input-container">
-                        <input type="text" id="youtubeUrl" placeholder="Paste YouTube URL here..." class="url-input">
+                    <div class="url-input-group">
+                        <input type="text" id="youtubeUrl" class="url-input" 
+                               placeholder="貼上 YouTube 影片連結..." maxlength="500">
                         <button id="loadVideoBtn" class="load-btn">
-                            <i class="fas fa-play"></i> Load Video
+                            <i class="fas fa-play"></i>
+                            載入影片
                         </button>
                     </div>
-                    <div class="video-info" id="videoInfo" style="display: none;">
-                        <span id="videoTitle">No video loaded</span>
-                        <div class="sync-controls">
-                            <button id="syncBtn" class="sync-btn">
-                                <i class="fas fa-sync"></i> Sync
-                            </button>
-                            <span id="syncStatus" class="sync-status">In Sync</span>
+                    
+                    <!-- 視頻信息 -->
+                    <div id="videoInfo" class="video-info hidden">
+                        <div class="video-details">
+                            <span id="videoTitle">尚未載入影片</span>
+                            <div class="video-actions">
+                                <button id="syncBtn" class="sync-btn">
+                                    <i class="fas fa-sync"></i>
+                                    同步
+                                </button>
+                                <span id="syncStatus" class="sync-status">已同步</span>
+                            </div>
                         </div>
                     </div>
                 </div>
-                
+
+                <!-- YouTube 播放器 -->
                 <div class="video-container">
                     <div id="youtubePlayer" class="youtube-player">
                         <div class="no-video">
                             <i class="fas fa-video"></i>
-                            <p>Load a YouTube video to start watching together!</p>
+                            <h3>載入 YouTube 影片開始觀看</h3>
+                            <p>在上方輸入框貼上 YouTube 影片連結</p>
                         </div>
                     </div>
                 </div>
 
-                <div class="danmu-controls">
-                    <button id="toggleDanmu" class="danmu-toggle active">
-                        <i class="fas fa-eye"></i> Hide Danmu
-                    </button>
-                    <div class="quick-danmu">
-                        <button class="quick-btn" data-emoji="❤️">❤️</button>
-                        <button class="quick-btn" data-emoji="🎆">🎆</button>
-                        <button class="quick-btn" data-emoji="🥰">🥰</button>
-                        <button class="quick-btn" data-emoji="🔥">🔥</button>
-                        <button class="quick-btn" data-emoji="💜">💜</button>
-                        <button class="quick-btn" data-emoji="✨">✨</button>
+                <!-- 彈幕快速按鈕 -->
+                <div class="danmu-quick-actions">
+                    <div class="quick-title">快速彈幕:</div>
+                    <div class="quick-buttons">
+                        <button class="quick-danmu-btn" data-emoji="❤️" title="愛心">❤️</button>
+                        <button class="quick-danmu-btn" data-emoji="🎆" title="煙火">🎆</button>
+                        <button class="quick-danmu-btn" data-emoji="🥰" title="害羞">🥰</button>
+                        <button class="quick-danmu-btn" data-emoji="🔥" title="火焰">🔥</button>
+                        <button class="quick-danmu-btn" data-emoji="💜" title="紫心">💜</button>
+                        <button class="quick-danmu-btn" data-emoji="✨" title="閃閃">✨</button>
+                        <button class="quick-danmu-btn" data-emoji="👏" title="鼓掌">👏</button>
+                        <button class="quick-danmu-btn" data-emoji="😍" title="愛慕">😍</button>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="chat-section">
-                <div class="chat-container">
+            <!-- 聊天側邊欄 -->
+            <aside class="chat-sidebar">
+                <!-- 在線用戶 -->
+                <div class="users-section">
+                    <h3 class="section-title">
+                        <i class="fas fa-users"></i>
+                        在線用戶
+                    </h3>
+                    <div id="usersList" class="users-list">
+                        <div class="loading-users">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            載入中...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 聊天室 -->
+                <div class="chat-section">
+                    <h3 class="section-title">
+                        <i class="fas fa-comments"></i>
+                        聊天室
+                    </h3>
                     <div id="chatMessages" class="chat-messages"></div>
-                    <div class="chat-input-container">
-                        <input type="text" id="chatInput" placeholder="Type your message..." class="chat-input">
+                    <div class="chat-input-group">
+                        <input type="text" id="chatInput" class="chat-input" 
+                               placeholder="輸入訊息..." maxlength="200">
                         <button id="sendChatBtn" class="send-btn">
                             <i class="fas fa-paper-plane"></i>
                         </button>
                     </div>
                 </div>
 
-                <div class="danmu-input-container">
-                    <input type="text" id="danmuInput" placeholder="Send danmu comment..." class="danmu-input">
-                    <button id="sendDanmuBtn" class="send-danmu-btn">
-                        <i class="fas fa-comment"></i> Send Danmu
-                    </button>
+                <!-- 彈幕輸入 -->
+                <div class="danmu-section">
+                    <h3 class="section-title">
+                        <i class="fas fa-comment-dots"></i>
+                        發送彈幕
+                    </h3>
+                    <div class="danmu-input-group">
+                        <input type="text" id="danmuInput" class="danmu-input" 
+                               placeholder="發送彈幕評論..." maxlength="50">
+                        <button id="sendDanmuBtn" class="send-danmu-btn">
+                            <i class="fas fa-rocket"></i>
+                        </button>
+                    </div>
+                    <div class="danmu-settings">
+                        <label class="setting-item">
+                            <input type="color" id="danmuColor" value="#ffffff">
+                            <span>彈幕顏色</span>
+                        </label>
+                    </div>
                 </div>
-
-                <div class="users-list">
-                    <h3>Online Users</h3>
-                    <div id="usersList" class="users-container"></div>
-                </div>
-            </div>
-        </div>
+            </aside>
+        </main>
     </div>
 
-    <!-- Customization Modal -->
+    <!-- 自定義彈窗 -->
     <div id="customizeModal" class="modal hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Customize Room</h3>
+                <h3>自定義房間</h3>
                 <button class="close-btn" id="closeCustomizeModal">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
             <div class="modal-body">
                 <div class="customize-section">
-                    <label for="backgroundUpload">Background Image:</label>
-                    <input type="file" id="backgroundUpload" accept="image/*">
-                    <button id="removeBackground" class="remove-bg-btn">Remove Background</button>
+                    <label for="backgroundUpload" class="upload-label">
+                        <i class="fas fa-image"></i>
+                        背景圖片
+                    </label>
+                    <input type="file" id="backgroundUpload" accept="image/*" class="file-input">
+                    <button id="removeBackground" class="remove-btn">
+                        <i class="fas fa-trash"></i>
+                        移除背景
+                    </button>
                 </div>
+                
                 <div class="customize-section">
-                    <label for="themeColor">Theme Color:</label>
-                    <input type="color" id="themeColor" value="#6b46c1">
+                    <label for="themeColor">主題顏色</label>
+                    <input type="color" id="themeColor" value="#6366f1" class="color-input">
                 </div>
+                
                 <div class="customize-section">
-                    <label for="danmuSpeed">Danmu Speed:</label>
-                    <input type="range" id="danmuSpeed" min="1" max="10" value="5">
-                    <span id="speedValue">5</span>
+                    <label for="danmuSpeed">彈幕速度</label>
+                    <div class="slider-group">
+                        <input type="range" id="danmuSpeed" min="1" max="10" value="5" class="speed-slider">
+                        <span id="speedValue" class="speed-value">5</span>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Invite Modal -->
+    <!-- 邀請朋友彈窗 -->
     <div id="inviteModal" class="modal hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Invite Friends</h3>
+                <h3>邀請朋友</h3>
                 <button class="close-btn" id="closeInviteModal">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
             <div class="modal-body">
-                <p>Share this link with your friends:</p>
+                <p>分享這個連結給你的朋友：</p>
                 <div class="link-container">
-                    <input type="text" id="shareLink" readonly>
+                    <input type="text" id="shareLink" readonly class="share-input">
                     <button id="copyShareBtn" class="copy-btn">
-                        <i class="fas fa-copy"></i> Copy
+                        <i class="fas fa-copy"></i>
+                        複製
+                    </button>
+                </div>
+                <div class="share-options">
+                    <button class="share-btn whatsapp" onclick="shareToWhatsApp()">
+                        <i class="fab fa-whatsapp"></i>
+                        WhatsApp
+                    </button>
+                    <button class="share-btn line" onclick="shareToLine()">
+                        <i class="fab fa-line"></i>
+                        LINE
+                    </button>
+                    <button class="share-btn telegram" onclick="shareToTelegram()">
+                        <i class="fab fa-telegram"></i>
+                        Telegram
                     </button>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- 腳本載入 -->
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://www.youtube.com/iframe_api"></script>
     <script src="js/danmu.js"></script>
     <script src="js/youtube.js"></script>
     <script src="js/room.js"></script>
-    
-    <script>
-        // Connection check and initialization
-        document.addEventListener('DOMContentLoaded', () => {
-            console.log('DOM loaded, checking connections...');
-            
-            // Check if all systems are available
-            setTimeout(() => {
-                console.log('Systems check:');
-                console.log('- Socket.io:', typeof io !== 'undefined' ? '✅' : '❌');
-                console.log('- Danmu System:', window.danmuSystem ? '✅' : '❌');
-                console.log('- YouTube Player:', window.youtubePlayer ? '✅' : '❌');
-                console.log('- Room Manager:', window.roomManager ? '✅' : '❌');
-                
-                if (!window.roomManager) {
-                    console.error('Room Manager failed to initialize!');
-                }
-            }, 2000);
-        });
-    </script>
 </body>
 </html>
