@@ -1,301 +1,363 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-const path = require('path');
-const crypto = require('crypto');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
 const cors = require('cors');
+const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
-// 添加生產環境配置
+// 配置
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
-console.log(`🌍 Environment: ${NODE_ENV}`);
-console.log(`🔗 Base URL: ${BASE_URL}`);
-
-// Initialize Express app
+// 創建應用
 const app = express();
 const server = http.createServer(app);
 
-// Socket.io 配置，適合 Render 部署
+// Socket.io 配置
 const io = socketIo(server, {
     cors: {
-        origin: NODE_ENV === 'production' ? [BASE_URL] : ["http://localhost:3000", "http://127.0.0.1:3000"],
+        origin: NODE_ENV === 'production' ? 
+            ["https://your-domain.onrender.com"] : 
+            ["http://localhost:3000", "http://127.0.0.1:3000"],
         methods: ["GET", "POST"],
         credentials: true
     },
     transports: ['websocket', 'polling'],
-    allowEIO3: true
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
-// Security middleware
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "https://www.youtube.com", "https://cdnjs.cloudflare.com"],
-            imgSrc: ["'self'", "data:", "https:", "http:"],
-            frameSrc: ["https://www.youtube.com"],
-            connectSrc: ["'self'", "ws:", "wss:"]
-        }
-    }
-}));
-
+// 中間件
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.static(path.join(__dirname, '../')));
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP'
-});
-app.use(limiter);
-
-// Serve static files from parent directory (where index.html is)
-app.use(express.static(path.join(__dirname, '..')));
-
-// Also serve from current directory for any server-specific files
-app.use('/server', express.static(__dirname));
-
-// In-memory storage (use Redis or MongoDB in production)
+// 簡單的數據存儲
 const rooms = new Map();
 const users = new Map();
 
-// Room management
+// 房間類
 class Room {
-    constructor(id, name, type, hostId, password = null) {
+    constructor(id, name, hostId, type = 'public', password = null) {
         this.id = id;
         this.name = name;
-        this.type = type; // 'public' or 'private'
         this.hostId = hostId;
+        this.type = type;
         this.password = password;
         this.users = new Map();
         this.currentVideo = null;
         this.customization = {
             background: null,
-            themeColor: '#6b46c1',
+            themeColor: '#6366f1',
             danmuSpeed: 5
         };
-        this.inviteToken = this.generateInviteToken();
-        this.createdAt = Date.now();
-        this.lastActivity = Date.now();
-    }
-
-    generateInviteToken() {
-        return crypto.randomBytes(32).toString('hex');
+        this.createdAt = new Date();
+        this.lastActivity = new Date();
     }
 
     addUser(user) {
         this.users.set(user.id, user);
-        this.updateActivity();
+        this.lastActivity = new Date();
+        return true;
     }
 
     removeUser(userId) {
-        this.users.delete(userId);
-        this.updateActivity();
-        
-        // If host leaves, assign new host
-        if (userId === this.hostId && this.users.size > 0) {
-            this.hostId = Array.from(this.users.keys())[0];
-        }
+        const removed = this.users.delete(userId);
+        this.lastActivity = new Date();
+        return removed;
     }
 
-    updateActivity() {
-        this.lastActivity = Date.now();
+    getUsersArray() {
+        return Array.from(this.users.values());
     }
 
-    getUserCount() {
-        return this.users.size;
+    isEmpty() {
+        return this.users.size === 0;
     }
 
     isHost(userId) {
-        return userId === this.hostId;
+        return this.hostId === userId;
     }
 
-    toPublicInfo() {
+    updateCurrentVideo(videoData) {
+        this.currentVideo = {
+            videoId: videoData.videoId,
+            title: videoData.title || '',
+            url: videoData.url || '',
+            startTime: videoData.startTime || 0,
+            timestamp: Date.now(),
+            changedBy: videoData.changedBy || '某位用戶' // 🆕 添加操作者信息
+        };
+        this.lastActivity = new Date();
+    }
+
+    updateCustomization(type, data, changedBy) {
+        if (this.customization.hasOwnProperty(type)) {
+            this.customization[type] = data;
+            this.customization.lastChangedBy = changedBy || '某位用戶'; // 🆕 記錄操作者
+            this.customization.lastChangedAt = Date.now();
+            this.lastActivity = new Date();
+        }
+    }
+
+    toJSON() {
         return {
             id: this.id,
             name: this.name,
-            userCount: this.getUserCount(),
-            currentVideo: this.currentVideo ? {
-                title: this.currentVideo.title,
-                thumbnail: this.currentVideo.thumbnail
-            } : null,
-            hasPassword: !!this.password
+            type: this.type,
+            userCount: this.users.size,
+            currentVideo: this.currentVideo ? this.currentVideo.title : null,
+            createdAt: this.createdAt,
+            lastActivity: this.lastActivity
         };
     }
 }
 
+// 用戶類
 class User {
-    constructor(id, username, socketId) {
-        this.id = id;
+    constructor(socketId, username) {
+        this.id = socketId;
         this.username = username;
-        this.socketId = socketId;
         this.roomId = null;
         this.isHost = false;
-        this.joinedAt = Date.now();
+        this.joinedAt = new Date();
+        this.lastActivity = new Date();
+    }
+
+    updateActivity() {
+        this.lastActivity = new Date();
+    }
+
+    toJSON() {
+        return {
+            id: this.id,
+            username: this.username,
+            isHost: this.isHost,
+            joinedAt: this.joinedAt
+        };
     }
 }
 
-// Utility functions
+// 工具函數
 function generateRoomId() {
-    return crypto.randomBytes(8).toString('hex').toUpperCase();
-}
-
-function generateUserId() {
-    return crypto.randomBytes(16).toString('hex');
-}
-
-function sanitizeInput(input) {
-    if (typeof input !== 'string') return '';
-    return input.trim().substring(0, 100); // Limit length and trim
-}
-
-function validateRoomName(name) {
-    return name && name.length >= 3 && name.length <= 50;
+    return uuidv4().substring(0, 8).toUpperCase();
 }
 
 function validateUsername(username) {
-    return username && username.length >= 2 && username.length <= 20;
+    return username && 
+           typeof username === 'string' && 
+           username.trim().length >= 2 && 
+           username.trim().length <= 20;
 }
 
-function extractVideoId(url) {
-    const patterns = [
-        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
-        /youtube\.com\/watch\?.*v=([^&\n?#]+)/
-    ];
-    
-    for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match) return match[1];
+function validateRoomName(roomName) {
+    return roomName && 
+           typeof roomName === 'string' && 
+           roomName.trim().length >= 3 && 
+           roomName.trim().length <= 50;
+}
+
+function validateYouTubeVideoId(videoId) {
+    return videoId && 
+           typeof videoId === 'string' && 
+           /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+}
+
+function getPublicRooms() {
+    return Array.from(rooms.values())
+        .filter(room => room.type === 'public' && !room.isEmpty())
+        .map(room => room.toJSON())
+        .sort((a, b) => b.userCount - a.userCount);
+}
+
+function cleanupEmptyRooms() {
+    for (const [roomId, room] of rooms.entries()) {
+        if (room.isEmpty()) {
+            console.log(`清理空房間: ${roomId}`);
+            rooms.delete(roomId);
+        }
     }
-    
-    return null;
 }
 
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
+// 🆕 記錄房間操作
+function logRoomAction(roomId, action, username, details = '') {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] Room ${roomId} - ${action} by ${username} ${details}`);
+}
 
-    // Create room
+// 定期清理空房間
+setInterval(cleanupEmptyRooms, 5 * 60 * 1000); // 每5分鐘清理一次
+
+// API 路由
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        rooms: rooms.size,
+        users: users.size,
+        version: 'no-host-restrictions' // 🆕 版本標識
+    });
+});
+
+app.get('/api/stats', (req, res) => {
+    res.json({
+        totalRooms: rooms.size,
+        totalUsers: users.size,
+        publicRooms: getPublicRooms().length,
+        uptime: process.uptime(),
+        version: 'no-host-restrictions'
+    });
+});
+
+// Socket.io 連接處理
+io.on('connection', (socket) => {
+    console.log(`用戶連接: ${socket.id}`);
+
+    // 創建房間
     socket.on('createRoom', (data) => {
         try {
+            console.log('收到創建房間請求:', data);
+
             const { username, roomName, roomType, password } = data;
-            
-            // Validate input
-            if (!validateUsername(sanitizeInput(username))) {
-                socket.emit('error', { message: 'Invalid username' });
-                return;
-            }
-            
-            if (!validateRoomName(sanitizeInput(roomName))) {
-                socket.emit('error', { message: 'Invalid room name' });
-                return;
+
+            // 驗證數據
+            if (!validateUsername(username)) {
+                return socket.emit('roomCreated', { 
+                    success: false, 
+                    message: '無效的用戶名' 
+                });
             }
 
-            // Create user
-            const userId = generateUserId();
-            const user = new User(userId, sanitizeInput(username), socket.id);
-            users.set(socket.id, user);
+            if (!validateRoomName(roomName)) {
+                return socket.emit('roomCreated', { 
+                    success: false, 
+                    message: '無效的房間名稱' 
+                });
+            }
 
-            // Create room
+            if (roomType && !['public', 'private'].includes(roomType)) {
+                return socket.emit('roomCreated', { 
+                    success: false, 
+                    message: '無效的房間類型' 
+                });
+            }
+
+            // 創建房間
             const roomId = generateRoomId();
-            const room = new Room(
-                roomId, 
-                sanitizeInput(roomName), 
-                roomType, 
-                userId, 
-                password ? sanitizeInput(password) : null
-            );
-            
+            const room = new Room(roomId, roomName, socket.id, roomType || 'public', password);
             rooms.set(roomId, room);
-            room.addUser(user);
+
+            // 創建用戶
+            const user = new User(socket.id, username);
             user.roomId = roomId;
             user.isHost = true;
+            users.set(socket.id, user);
 
-            // Join socket room
+            // 加入房間
+            room.addUser(user);
             socket.join(roomId);
 
-            // Generate invite link
-            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
-            const inviteLink = `${baseUrl}/room.html?id=${roomId}&token=${room.inviteToken}`;
+            logRoomAction(roomId, 'CREATED', username, `(${roomType})`);
 
+            // 生成邀請連結
+            const baseUrl = `http://localhost:${PORT}`;
+            const inviteLink = `${baseUrl}/room.html?id=${roomId}`;
+
+            // 響應創建成功
             socket.emit('roomCreated', {
                 success: true,
                 roomId: roomId,
-                username: user.username,
+                roomName: roomName,
                 roomType: roomType,
+                username: username,
                 inviteLink: inviteLink
             });
 
-            // Update public rooms list
+            // 廣播公開房間列表更新
             if (roomType === 'public') {
-                broadcastPublicRooms();
+                io.emit('publicRooms', getPublicRooms());
             }
 
-            console.log(`Room created: ${roomId} by ${username}`);
-
         } catch (error) {
-            console.error('Error creating room:', error);
-            socket.emit('error', { message: 'Failed to create room' });
+            console.error('創建房間錯誤:', error);
+            socket.emit('roomCreated', { 
+                success: false, 
+                message: '創建房間失敗' 
+            });
         }
     });
 
-    // Join room
+    // 加入房間
     socket.on('joinRoom', (data) => {
         try {
-            const { roomId, username, password, inviteToken } = data;
-            
-            if (!validateUsername(sanitizeInput(username))) {
-                socket.emit('error', { message: 'Invalid username' });
-                return;
+            console.log('收到加入房間請求:', data);
+
+            const { roomId, username, password } = data;
+
+            // 驗證數據
+            if (!validateUsername(username)) {
+                return socket.emit('joinedRoom', { 
+                    success: false, 
+                    message: '無效的用戶名' 
+                });
             }
 
+            if (!roomId || typeof roomId !== 'string') {
+                return socket.emit('joinedRoom', { 
+                    success: false, 
+                    message: '無效的房間 ID' 
+                });
+            }
+
+            // 檢查房間是否存在
             const room = rooms.get(roomId);
             if (!room) {
-                socket.emit('joinedRoom', { 
+                return socket.emit('joinedRoom', { 
                     success: false, 
-                    message: 'Room not found' 
+                    message: '房間不存在' 
                 });
-                return;
             }
 
-            // Check password for private rooms
-            if (room.type === 'private' && room.password) {
-                if (!password || password !== room.password) {
-                    // Check invite token as alternative
-                    if (!inviteToken || inviteToken !== room.inviteToken) {
-                        socket.emit('joinedRoom', { 
-                            success: false, 
-                            message: 'Invalid password or invite link' 
-                        });
-                        return;
-                    }
+           // 🔧 檢查密碼（跳轉用戶和房主跳過驗證）
+            const isFromRedirect = data.fromRedirect;
+            const isRoomHost = room.isHost(socket.id);
+
+            if (room.password && room.password !== password && !isFromRedirect && !isRoomHost) {
+                return socket.emit('joinedRoom', { 
+                    success: false, 
+                    message: '房間密碼錯誤' 
+                });
+            }
+
+            console.log(`用戶加入房間: ${username}, 跳轉用戶: ${isFromRedirect}, 房主: ${isRoomHost}`);
+
+            // 如果用戶已在其他房間，先離開
+            const existingUser = users.get(socket.id);
+            if (existingUser && existingUser.roomId) {
+                socket.leave(existingUser.roomId);
+                const oldRoom = rooms.get(existingUser.roomId);
+                if (oldRoom) {
+                    oldRoom.removeUser(socket.id);
+                    socket.to(existingUser.roomId).emit('userLeft', { 
+                        userId: socket.id 
+                    });
                 }
             }
 
-            // Remove user from previous room if any
-            const existingUser = users.get(socket.id);
-            if (existingUser && existingUser.roomId) {
-                leaveRoom(socket, existingUser.roomId);
-            }
-
-            // Create or update user
-            const userId = existingUser ? existingUser.id : generateUserId();
-            const user = new User(userId, sanitizeInput(username), socket.id);
+            // 創建或更新用戶
+            const user = new User(socket.id, username);
+            user.roomId = roomId;
+            user.isHost = room.isHost(socket.id);
             users.set(socket.id, user);
 
-            // Join room
+            // 加入房間
             room.addUser(user);
-            user.roomId = roomId;
             socket.join(roomId);
 
-            // Send room data
+            logRoomAction(roomId, 'JOINED', username);
+
+            // 通知用戶加入成功
             socket.emit('joinedRoom', {
                 success: true,
                 room: {
@@ -304,368 +366,409 @@ io.on('connection', (socket) => {
                     currentVideo: room.currentVideo,
                     customization: room.customization
                 },
-                isHost: room.isHost(userId)
+                isHost: user.isHost
             });
 
-            // Notify other users
-            socket.to(roomId).emit('userJoined', {
-                id: user.id,
-                username: user.username,
-                isHost: room.isHost(user.id)
-            });
+            // 通知房間內其他用戶
+            socket.to(roomId).emit('userJoined', user.toJSON());
 
-            // Send users list
-            const roomUsers = Array.from(room.users.values()).map(u => ({
-                id: u.id,
-                username: u.username,
-                isHost: room.isHost(u.id)
-            }));
-            io.to(roomId).emit('usersUpdate', roomUsers);
+            // 發送用戶列表更新
+            io.to(roomId).emit('usersUpdate', room.getUsersArray());
 
-            // Update public rooms if applicable
+            // 更新公開房間列表
             if (room.type === 'public') {
-                broadcastPublicRooms();
+                io.emit('publicRooms', getPublicRooms());
             }
 
-            console.log(`User ${username} joined room ${roomId}`);
-
         } catch (error) {
-            console.error('Error joining room:', error);
-            socket.emit('error', { message: 'Failed to join room' });
+            console.error('加入房間錯誤:', error);
+            socket.emit('joinedRoom', { 
+                success: false, 
+                message: '加入房間失敗' 
+            });
         }
     });
 
-    // Get public rooms
+    // 獲取公開房間列表
     socket.on('getPublicRooms', () => {
-        sendPublicRooms(socket);
+        socket.emit('publicRooms', getPublicRooms());
     });
 
-    // Chat message
+    // 聊天訊息
     socket.on('chatMessage', (data) => {
         try {
+            const { roomId, message } = data;
             const user = users.get(socket.id);
-            if (!user || !user.roomId) return;
 
-            const room = rooms.get(user.roomId);
-            if (!room) return;
+            if (!user || user.roomId !== roomId) {
+                return socket.emit('error', { message: '未加入房間' });
+            }
 
-            const message = sanitizeInput(data.message);
-            if (!message || message.length > 500) return;
+            if (!message || typeof message !== 'string' || message.trim().length === 0) {
+                return socket.emit('error', { message: '無效的訊息內容' });
+            }
 
-            const messageData = {
-                id: crypto.randomBytes(8).toString('hex'),
+            const room = rooms.get(roomId);
+            if (!room) {
+                return socket.emit('error', { message: '房間不存在' });
+            }
+
+            user.updateActivity();
+
+            const chatMessage = {
                 username: user.username,
-                message: message,
+                message: message.trim(),
                 timestamp: Date.now(),
-                userId: user.id
+                type: 'user'
             };
 
-            io.to(user.roomId).emit('chatMessage', messageData);
-            room.updateActivity();
+            // 廣播聊天訊息
+            io.to(roomId).emit('chatMessage', chatMessage);
+
+            console.log(`聊天訊息 ${roomId}: ${user.username}: ${message}`);
 
         } catch (error) {
-            console.error('Error handling chat message:', error);
+            console.error('聊天訊息錯誤:', error);
+            socket.emit('error', { message: '發送訊息失敗' });
         }
     });
 
-    // Danmu message
+    // 彈幕訊息
     socket.on('danmuMessage', (data) => {
         try {
+            const { roomId, message, color, isQuick } = data;
             const user = users.get(socket.id);
-            if (!user || !user.roomId) return;
 
-            const room = rooms.get(user.roomId);
-            if (!room) return;
+            if (!user || user.roomId !== roomId) {
+                return socket.emit('error', { message: '未加入房間' });
+            }
 
-            const message = sanitizeInput(data.message);
-            if (!message || message.length > 100) return;
+            if (!message || typeof message !== 'string' || message.trim().length === 0) {
+                return socket.emit('error', { message: '無效的彈幕內容' });
+            }
 
-            const danmuData = {
-                id: crypto.randomBytes(8).toString('hex'),
+            const room = rooms.get(roomId);
+            if (!room) {
+                return socket.emit('error', { message: '房間不存在' });
+            }
+
+            // 驗證顏色
+            const validColor = color && /^#[0-9A-F]{6}$/i.test(color) ? color : '#ffffff';
+
+            user.updateActivity();
+
+            const danmuMessage = {
                 username: user.username,
-                message: message,
-                color: data.color || '#ffffff',
-                timestamp: Date.now(),
-                userId: user.id,
-                isQuick: data.isQuick || false
+                message: message.trim(), // 🔧 修正：統一使用 message 而非 text
+                color: validColor,
+                isQuick: Boolean(isQuick),
+                timestamp: Date.now()
             };
 
-            io.to(user.roomId).emit('danmuMessage', danmuData);
-            room.updateActivity();
+            // 廣播彈幕
+            io.to(roomId).emit('danmuMessage', danmuMessage);
+
+            console.log(`彈幕 ${roomId}: ${user.username}: ${message}`);
 
         } catch (error) {
-            console.error('Error handling danmu message:', error);
+            console.error('彈幕錯誤:', error);
+            socket.emit('error', { message: '發送彈幕失敗' });
         }
     });
 
-    // Video controls
-    socket.on('changeVideo', async (data) => {
+    // 🔧 更換視頻 - 移除房主限制
+    socket.on('changeVideo', (data) => {
         try {
+            const { roomId, videoId, url, changedBy } = data;
             const user = users.get(socket.id);
-            if (!user || !user.roomId) return;
+            const room = rooms.get(roomId);
 
-            const room = rooms.get(user.roomId);
-            if (!room || !room.isHost(user.id)) {
-                socket.emit('error', { message: 'Only hosts can change videos' });
-                return;
+            if (!user || !room || user.roomId !== roomId) {
+                return socket.emit('error', { message: '你不在這個房間中' });
             }
 
-            const videoId = extractVideoId(data.url);
-            if (!videoId) {
-                socket.emit('error', { message: 'Invalid YouTube URL' });
-                return;
+            // 🔧 移除房主檢查 - 任何用戶都可以更換視頻
+            // if (!room.isHost(socket.id)) {
+            //     return socket.emit('error', { message: '只有房主可以更換視頻' });
+            // }
+
+            if (!validateYouTubeVideoId(videoId)) {
+                return socket.emit('error', { message: '無效的 YouTube 視頻 ID' });
             }
 
-            // Fetch video info (simplified - in production use YouTube API)
+            user.updateActivity();
+
             const videoData = {
                 videoId: videoId,
-                url: data.url,
-                title: data.title || 'Unknown Video',
+                url: url,
+                title: '', // 客戶端會獲取標題
                 startTime: 0,
-                loadedBy: user.username,
-                loadedAt: Date.now()
+                changedBy: changedBy || user.username
             };
 
-            room.currentVideo = videoData;
-            room.updateActivity();
+            room.updateCurrentVideo(videoData);
 
-            io.to(user.roomId).emit('videoChanged', videoData);
+            // 廣播視頻變更
+            io.to(roomId).emit('videoChanged', videoData);
 
-            // Update public rooms if applicable
+            // 更新公開房間列表（顯示當前播放）
             if (room.type === 'public') {
-                broadcastPublicRooms();
+                io.emit('publicRooms', getPublicRooms());
             }
 
+            logRoomAction(roomId, 'VIDEO_CHANGED', user.username, `to ${videoId}`);
+
         } catch (error) {
-            console.error('Error changing video:', error);
-            socket.emit('error', { message: 'Failed to change video' });
+            console.error('更換視頻錯誤:', error);
+            socket.emit('error', { message: '更換視頻失敗' });
         }
     });
 
-    // Video actions (play, pause, seek)
+    // 🔧 視頻動作同步 - 移除房主限制
     socket.on('videoAction', (data) => {
         try {
+            const { action, time, videoId } = data;
             const user = users.get(socket.id);
-            if (!user || !user.roomId) return;
 
-            const room = rooms.get(user.roomId);
-            if (!room || !room.isHost(user.id)) return;
-
-            // Broadcast to all users except sender
-            socket.to(user.roomId).emit('videoAction', {
-                action: data.action,
-                time: data.time,
-                videoId: data.videoId,
-                timestamp: Date.now()
-            });
-
-            room.updateActivity();
-
-        } catch (error) {
-            console.error('Error handling video action:', error);
-        }
-    });
-
-    // Sync request
-    socket.on('requestSync', (data) => {
-        try {
-            const user = users.get(socket.id);
-            if (!user || !user.roomId) return;
-
-            const room = rooms.get(user.roomId);
-            if (!room) return;
-
-            // Find host and request current state
-            const host = Array.from(room.users.values()).find(u => room.isHost(u.id));
-            if (host && host.socketId !== socket.id) {
-                io.to(host.socketId).emit('syncRequest', { requesterId: socket.id });
+            if (!user || !user.roomId) {
+                return;
             }
 
+            const room = rooms.get(user.roomId);
+            if (!room) {
+                return;
+            }
+
+            // 🔧 移除房主檢查 - 任何用戶都可以控制播放
+            // if (!room.isHost(socket.id)) {
+            //     return; // 只有房主可以控制播放
+            // }
+
+            user.updateActivity();
+
+            // 廣播視頻動作（除了發送者）
+            socket.to(user.roomId).emit('videoAction', {
+                action: action,
+                time: time,
+                videoId: videoId,
+                timestamp: Date.now(),
+                changedBy: user.username
+            });
+
+            logRoomAction(user.roomId, `VIDEO_${action.toUpperCase()}`, user.username, `at ${time}s`);
+
         } catch (error) {
-            console.error('Error handling sync request:', error);
+            console.error('視頻動作錯誤:', error);
         }
     });
 
-    // Sync broadcast (from host)
+    // 🔧 同步廣播 - 移除房主限制
     socket.on('syncBroadcast', (data) => {
         try {
             const user = users.get(socket.id);
-            if (!user || !user.roomId) return;
 
-            const room = rooms.get(user.roomId);
-            if (!room || !room.isHost(user.id)) return;
-
-            socket.to(user.roomId).emit('videoSync', {
-                time: data.time,
-                isPlaying: data.isPlaying,
-                videoId: data.videoId,
-                timestamp: data.timestamp
-            });
-
-        } catch (error) {
-            console.error('Error handling sync broadcast:', error);
-        }
-    });
-
-    // Room customization
-    socket.on('updateRoomCustomization', (data) => {
-        try {
-            const user = users.get(socket.id);
-            if (!user || !user.roomId) return;
-
-            const room = rooms.get(user.roomId);
-            if (!room || !room.isHost(user.id)) {
-                socket.emit('error', { message: 'Only hosts can customize the room' });
+            if (!user || !user.roomId) {
                 return;
             }
 
-            // Update customization
-            switch (data.type) {
-                case 'background':
-                    room.customization.background = data.data;
-                    break;
-                case 'themeColor':
-                    room.customization.themeColor = data.data;
-                    break;
-                case 'danmuSpeed':
-                    room.customization.danmuSpeed = parseInt(data.data) || 5;
-                    break;
+            const room = rooms.get(user.roomId);
+            if (!room) {
+                return;
             }
 
-            // Broadcast to all users in room
-            io.to(user.roomId).emit('roomCustomization', room.customization);
-            room.updateActivity();
+            // 🔧 移除房主檢查 - 任何用戶都可以廣播同步
+            // if (!room.isHost(socket.id)) {
+            //     return; // 只有房主可以廣播同步
+            // }
+
+            user.updateActivity();
+
+            // 廣播同步信息（除了發送者）
+            socket.to(user.roomId).emit('syncBroadcast', {
+                videoId: data.videoId,
+                time: data.time,
+                isPlaying: data.isPlaying,
+                timestamp: Date.now(),
+                changedBy: user.username
+            });
 
         } catch (error) {
-            console.error('Error updating room customization:', error);
+            console.error('同步廣播錯誤:', error);
         }
     });
 
-    // Disconnect handling
+    // 請求同步
+    socket.on('requestSync', (data) => {
+        try {
+            const { roomId } = data;
+            const user = users.get(socket.id);
+
+            if (!user || user.roomId !== roomId) {
+                return;
+            }
+
+            const room = rooms.get(roomId);
+            if (!room) {
+                return;
+            }
+
+            user.updateActivity();
+
+            // 🔧 向房間內所有用戶廣播同步請求，而不只是房主
+            socket.to(user.roomId).emit('syncRequest', { 
+                fromUser: user.username 
+            });
+
+        } catch (error) {
+            console.error('請求同步錯誤:', error);
+        }
+    });
+
+    // 🔧 房間自定義 - 移除房主限制
+    socket.on('updateRoomCustomization', (data) => {
+        try {
+            const { roomId, type, data: customData, changedBy } = data;
+            const user = users.get(socket.id);
+            const room = rooms.get(roomId);
+
+            if (!user || !room || user.roomId !== roomId) {
+                return socket.emit('error', { message: '你不在這個房間中' });
+            }
+
+            // 🔧 移除房主檢查 - 任何用戶都可以自定義房間
+            // if (!room.isHost(socket.id)) {
+            //     return socket.emit('error', { message: '只有房主可以自定義房間' });
+            // }
+
+            // 驗證自定義類型
+            const allowedTypes = ['background', 'themeColor', 'danmuSpeed'];
+            if (!allowedTypes.includes(type)) {
+                return socket.emit('error', { message: '無效的自定義類型' });
+            }
+
+            // 驗證數據
+            if (type === 'themeColor' && !/^#[0-9A-F]{6}$/i.test(customData)) {
+                return socket.emit('error', { message: '無效的顏色格式' });
+            }
+
+            if (type === 'danmuSpeed' && (customData < 1 || customData > 10)) {
+                return socket.emit('error', { message: '無效的彈幕速度' });
+            }
+
+            if (type === 'background' && customData && typeof customData !== 'string') {
+                return socket.emit('error', { message: '無效的背景數據' });
+            }
+
+            user.updateActivity();
+            room.updateCustomization(type, customData, changedBy || user.username);
+
+            // 廣播自定義更新
+            io.to(roomId).emit('roomCustomization', { 
+                [type]: customData,
+                changedBy: changedBy || user.username
+            });
+
+            logRoomAction(roomId, `CUSTOMIZATION_${type.toUpperCase()}`, user.username);
+
+        } catch (error) {
+            console.error('房間自定義錯誤:', error);
+            socket.emit('error', { message: '自定義失敗' });
+        }
+    });
+
+    // 用戶斷開連接
     socket.on('disconnect', () => {
         try {
+            console.log(`用戶斷開連接: ${socket.id}`);
+
             const user = users.get(socket.id);
             if (user && user.roomId) {
-                leaveRoom(socket, user.roomId);
+                const room = rooms.get(user.roomId);
+                if (room) {
+                    room.removeUser(socket.id);
+                    
+                    // 通知房間內其他用戶
+                    socket.to(user.roomId).emit('userLeft', { 
+                        userId: socket.id 
+                    });
+                    
+                    // 發送更新的用戶列表
+                    io.to(user.roomId).emit('usersUpdate', room.getUsersArray());
+                    
+                    // 如果房主離開，轉移房主權限
+                    if (room.isHost(socket.id) && !room.isEmpty()) {
+                        const newHost = Array.from(room.users.values())[0];
+                        if (newHost) {
+                            room.hostId = newHost.id;
+                            newHost.isHost = true;
+                            users.set(newHost.id, newHost);
+                            
+                            io.to(newHost.id).emit('hostTransferred', { 
+                                isHost: true 
+                            });
+                            
+                            socket.to(user.roomId).emit('chatMessage', {
+                                type: 'system',
+                                message: `${newHost.username} 成為新的房主`,
+                                timestamp: Date.now()
+                            });
+
+                            logRoomAction(user.roomId, 'HOST_TRANSFERRED', newHost.username);
+                        }
+                    }
+                    
+                    // 更新公開房間列表
+                    if (room.type === 'public') {
+                        io.emit('publicRooms', getPublicRooms());
+                    }
+
+                    logRoomAction(user.roomId, 'LEFT', user.username);
+                }
             }
+
             users.delete(socket.id);
-            console.log('User disconnected:', socket.id);
 
         } catch (error) {
-            console.error('Error handling disconnect:', error);
+            console.error('斷開連接處理錯誤:', error);
         }
     });
 });
 
-// Helper functions
-function leaveRoom(socket, roomId) {
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    const user = users.get(socket.id);
-    if (!user) return;
-
-    room.removeUser(user.id);
-    socket.leave(roomId);
-
-    // Notify other users
-    socket.to(roomId).emit('userLeft', user.id);
-
-    // Update users list
-    const roomUsers = Array.from(room.users.values()).map(u => ({
-        id: u.id,
-        username: u.username,
-        isHost: room.isHost(u.id)
-    }));
-    io.to(roomId).emit('usersUpdate', roomUsers);
-
-    // Delete empty rooms
-    if (room.getUserCount() === 0) {
-        rooms.delete(roomId);
-        console.log(`Room ${roomId} deleted (empty)`);
-    }
-
-    // Update public rooms
-    broadcastPublicRooms();
-}
-
-function sendPublicRooms(socket) {
-    const publicRooms = Array.from(rooms.values())
-        .filter(room => room.type === 'public' && room.getUserCount() > 0)
-        .map(room => room.toPublicInfo())
-        .sort((a, b) => b.userCount - a.userCount);
-
-    socket.emit('publicRoomsUpdate', publicRooms);
-}
-
-function broadcastPublicRooms() {
-    const publicRooms = Array.from(rooms.values())
-        .filter(room => room.type === 'public' && room.getUserCount() > 0)
-        .map(room => room.toPublicInfo())
-        .sort((a, b) => b.userCount - a.userCount);
-
-    io.emit('publicRoomsUpdate', publicRooms);
-}
-
-// Cleanup inactive rooms (run every 5 minutes)
-setInterval(() => {
-    const now = Date.now();
-    const inactiveThreshold = 30 * 60 * 1000; // 30 minutes
-
-    for (const [roomId, room] of rooms.entries()) {
-        if (now - room.lastActivity > inactiveThreshold) {
-            rooms.delete(roomId);
-            console.log(`Room ${roomId} deleted (inactive)`);
-        }
-    }
-
-    broadcastPublicRooms();
-}, 5 * 60 * 1000);
-
-// Routes
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'index.html'));
-});
-
-app.get('/room.html', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'room.html'));
-});
-
-// Health check
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        rooms: rooms.size, 
-        users: users.size,
-        uptime: process.uptime()
-    });
-});
-
-// Error handling
+// 錯誤處理
 app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).send('Something broke!');
+    console.error('Express 錯誤:', err);
+    res.status(500).json({ error: '服務器內部錯誤' });
 });
 
-// Start server
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 服務器運行在端口 ${PORT}`);
-    console.log(`🌐 訪問地址: ${BASE_URL}`);
-    console.log(`📱 本地測試: http://localhost:${PORT}`);
-    
-    if (NODE_ENV === 'production') {
-        console.log('🎉 生產環境部署成功！');
-    } else {
-        console.log('🛠️  開發模式運行中');
-    }
+// 404 處理
+app.use((req, res) => {
+    res.status(404).sendFile(path.join(__dirname, '../index.html'));
 });
 
-// Graceful shutdown
+// 優雅關閉
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down gracefully');
+    console.log('收到 SIGTERM，正在關閉服務器...');
     server.close(() => {
-        console.log('Process terminated');
+        console.log('服務器已關閉');
+        process.exit(0);
     });
 });
 
+process.on('SIGINT', () => {
+    console.log('收到 SIGINT，正在關閉服務器...');
+    server.close(() => {
+        console.log('服務器已關閉');
+        process.exit(0);
+    });
+});
+
+// 啟動服務器
+server.listen(PORT, () => {
+    console.log(`🚀 K-Pop Watch Party 服務器運行在端口 ${PORT} (無房主限制版本)`);
+    console.log(`🌍 環境: ${NODE_ENV}`);
+    console.log(`📝 健康檢查: http://localhost:${PORT}/health`);
+    console.log(`✨ 特色: 所有用戶都可以載入影片和自定義房間！`);
+});
+
+// 導出供測試使用
 module.exports = { app, server, io };
