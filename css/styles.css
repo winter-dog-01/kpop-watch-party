@@ -410,3 +410,32 @@ body {
     color: #991b1b;
     border: 1px solid #ef4444;
 }
+@media (max-width: 768px) {
+    .main-content {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    
+    .title {
+        font-size: 2rem;
+    }
+    
+    .container {
+        padding: 10px;
+    }
+    
+    .create-room-section,
+    .public-rooms-section,
+    .join-private-section {
+        padding: 20px 15px;
+    }
+    
+    .input-group input {
+        font-size: 16px; /* 防止 iOS 放大 */
+    }
+    
+    .create-btn, .join-btn {
+        padding: 12px 20px;
+        font-size: 14px;
+    }
+}
